@@ -422,6 +422,7 @@ func clientMain(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options
 	if len(remaining) == 1 {
 		// Usages with just one SRC arg and no DEST arg list the source files
 		// instead of copying.
+		opts.SetListOnly()
 		dest := ""
 		sources := remaining
 		return rsyncMain(ctx, osenv, opts, sources, dest)

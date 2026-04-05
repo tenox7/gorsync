@@ -89,12 +89,9 @@ func (o *Options) ServerOptions() []string {
 	// if (do_compression)
 	// 	argstr[x++] = 'z';
 
-	// /* this is a complete hack - blame Rusty
-
-	//    this is a hack to make the list_only (remote file list)
-	//    more useful */
-	// if (list_only && !recurse)
-	// 	argstr[x++] = 'r';
+	if o.xfer_dirs > 0 && !o.Recurse() {
+		argstr += "d"
+	}
 
 	// argstr[x] = 0;
 
