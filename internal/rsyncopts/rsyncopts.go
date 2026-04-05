@@ -719,6 +719,12 @@ func (o *Options) Verbose() bool              { return o.verbose != 0 }
 func (o *Options) DeleteMode() bool           { return o.delete_mode != 0 }
 func (o *Options) Sender() bool               { return o.am_sender != 0 }
 func (o *Options) SetSender()                 { o.am_sender = 1 }
+func (o *Options) SetListOnly() {
+	o.list_only = 1
+	if o.recurse == 0 {
+		o.xfer_dirs = 1
+	}
+}
 func (o *Options) LocalServer() bool          { return o.local_server != 0 }
 func (o *Options) SetLocalServer()            { o.local_server = 1 }
 func (o *Options) Server() bool               { return o.am_server != 0 }
