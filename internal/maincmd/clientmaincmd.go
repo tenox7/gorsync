@@ -146,7 +146,7 @@ func rsyncMain(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 		}
 		negotiate = false // already done
 	}
-	stats, err := ClientRun(osenv, opts, conn, paths, negotiate)
+	stats, _, err := ClientRun(osenv, opts, conn, paths, negotiate)
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +254,7 @@ func doCmd(osenv *rsyncos.Env, opts *rsyncopts.Options, machine, user, path stri
 }
 
 // rsync/main.c:client_run
-func ClientRun(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriter, paths []string, negotiate bool) (*rsyncstats.TransferStats, error) {
+func ClientRun(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriter, paths []string, negotiate bool) (*rsyncstats.TransferStats, []rsync.FileInfo, error) {
 	crd := &rsyncwire.CountingReader{R: conn}
 	cwr := &rsyncwire.CountingWriter{W: conn}
 	c := &rsyncwire.Conn{
@@ -264,11 +264,11 @@ func ClientRun(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriter, 
 
 	if negotiate {
 		if err := c.WriteInt32(rsync.ProtocolVersion); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		remoteProtocol, err := c.ReadInt32()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if opts.Verbose() {
 			osenv.Logf("remote protocol: %d", remoteProtocol)
@@ -277,7 +277,7 @@ func ClientRun(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriter, 
 
 	seed, err := c.ReadInt32()
 	if err != nil {
-		return nil, fmt.Errorf("reading seed: %v", err)
+		return nil, nil, fmt.Errorf("reading seed: %v", err)
 	}
 
 	mrd := &rsyncwire.MultiplexReader{
@@ -317,7 +317,7 @@ func ClientRun(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriter, 
 			hasTrailingSlash := strings.HasSuffix(path, "/")
 			abs, err := filepath.Abs(path)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			paths[idx] = abs
 			if hasTrailingSlash {
@@ -327,13 +327,13 @@ func ClientRun(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriter, 
 
 		stats, err := st.Do(crd, cwr, FileSystemRoot, paths, nil)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return stats, nil
+		return stats, nil, nil
 	}
 
 	if len(paths) != 1 {
-		return nil, fmt.Errorf("BUG: expected exactly one path, got %q", paths)
+		return nil, nil, fmt.Errorf("BUG: expected exactly one path, got %q", paths)
 	}
 
 	rt := &receiver.Transfer{
@@ -371,16 +371,16 @@ func ClientRun(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriter, 
 		// just listing modules, not transferring anything
 	} else {
 		if err := os.MkdirAll(rt.Dest, 0755); err != nil {
-			return nil, fmt.Errorf("MkdirAll(dest=%s): %v", rt.Dest, err)
+			return nil, nil, fmt.Errorf("MkdirAll(dest=%s): %v", rt.Dest, err)
 		}
 		rt.DestRoot, err = os.OpenRoot(rt.Dest)
 		if err != nil {
-			return nil, fmt.Errorf("OpenRoot(dest=%s): %v", rt.Dest, err)
+			return nil, nil, fmt.Errorf("OpenRoot(dest=%s): %v", rt.Dest, err)
 		}
 		defer rt.DestRoot.Close()
 		if osenv.Restrict() {
 			if err := restrict.MaybeFileSystem(nil, []string{rt.Dest}); err != nil {
-				return nil, fmt.Errorf("landlock: %v", err)
+				return nil, nil, fmt.Errorf("landlock: %v", err)
 			}
 		}
 	}
@@ -391,7 +391,7 @@ func ClientRun(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriter, 
 	}
 	const exclusionListEnd = 0
 	if err := c.WriteInt32(exclusionListEnd); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if opts.DebugGTE(rsyncopts.DEBUG_RECV, 1) {
@@ -404,13 +404,28 @@ func ClientRun(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriter, 
 	}
 	fileList, err := rt.ReceiveFileList()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if opts.DebugGTE(rsyncopts.DEBUG_FLIST, 2) {
 		osenv.Logf("received %d names", len(fileList))
 	}
 
-	return rt.Do(c, fileList, false)
+	fileInfos := make([]rsync.FileInfo, len(fileList))
+	for i, f := range fileList {
+		fileInfos[i] = rsync.FileInfo{
+			Name:     f.Name,
+			Length:   f.Length,
+			ModTime:  f.ModTime,
+			Mode:     f.Mode,
+			Checksum: f.Checksum,
+		}
+	}
+
+	stats, err := rt.Do(c, fileList, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	return stats, fileInfos, nil
 }
 
 func clientMain(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options, remaining []string) (*rsyncstats.TransferStats, error) {

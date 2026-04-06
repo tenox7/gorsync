@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/gokrazy/rsync"
 	"github.com/gokrazy/rsync/internal/maincmd"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
 	"github.com/gokrazy/rsync/internal/rsyncos"
@@ -100,7 +101,8 @@ func (c *Client) ServerCommandOptions(path string, paths ...string) []string {
 
 // Result contains information about a transfer.
 type Result struct {
-	Stats *rsyncstats.TransferStats
+	Stats    *rsyncstats.TransferStats
+	FileList []rsync.FileInfo
 }
 
 // Run starts one run of the rsync protocol (not the rsync daemon protocol), see
@@ -121,11 +123,11 @@ type Result struct {
 // [Client.ServerCommandOptions] to the server and then arrange for two
 // [io.ReadWriter] connections between client and server.
 func (c *Client) Run(ctx context.Context, conn io.ReadWriter, paths []string) (*Result, error) {
-	stats, err := maincmd.ClientRun(c.osenv, c.opts, conn, paths, c.negotiate)
+	stats, fileList, err := maincmd.ClientRun(c.osenv, c.opts, conn, paths, c.negotiate)
 	if err != nil {
 		return nil, err
 	}
-	return &Result{Stats: stats}, nil
+	return &Result{Stats: stats, FileList: fileList}, nil
 }
 
 // RunDaemon starts one run of the rsync daemon protocol, meaning it performs
