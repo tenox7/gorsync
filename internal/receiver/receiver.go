@@ -108,7 +108,11 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File) error {
 		local := filepath.Join(rt.Dest, f.Name)
 		rt.Logger.Printf("creating %s", local)
 	}
-	out, err := newPendingFile(rt.DestRoot, f.Name)
+	out, err := newPendingFile(rt.DestRoot, f.Name, outputMode{
+		Inplace:     rt.Opts.Inplace,
+		KeepPartial: rt.Opts.KeepPartial,
+		PartialDir:  rt.Opts.PartialDir,
+	})
 	if err != nil {
 		return err
 	}
