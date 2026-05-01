@@ -107,6 +107,15 @@ Outer:
 			tagHits++
 			for ; j < int(head.ChecksumCount) && targets[j].tag == tag; j++ {
 				i := targets[j].index
+				// In --inplace mode the receiver writes directly to the
+				// destination as it processes tokens, so a block-match that
+				// points to an offset the receiver has already written past
+				// would read overwritten content. Constrain matches to be
+				// forward references only; if no forward match is found the
+				// data falls through to be sent as literal.
+				if st.Opts.Inplace() && int64(i)*int64(head.BlockLength) < offset {
+					continue
+				}
 				if sum != head.Sums[i].Sum1 {
 					continue
 				}
