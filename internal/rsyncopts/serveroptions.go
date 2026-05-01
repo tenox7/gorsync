@@ -157,8 +157,17 @@ func (o *Options) ServerOptions() []string {
 	// 	args[ac++] = arg;
 	// }
 
-	// if (keep_partial)
-	// 	args[ac++] = "--partial";
+	if o.inplace != 0 {
+		sargv = append(sargv, "--inplace")
+	}
+
+	if o.keep_partial != 0 {
+		sargv = append(sargv, "--partial")
+	}
+
+	if o.partial_dir != "" {
+		sargv = append(sargv, "--partial-dir="+o.partial_dir)
+	}
 
 	// if (force_delete)
 	// 	args[ac++] = "--force";
