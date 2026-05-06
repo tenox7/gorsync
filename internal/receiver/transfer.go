@@ -28,6 +28,7 @@ type TransferOpts struct {
 	PreserveHardlinks bool
 	IgnoreTimes       bool
 	AlwaysChecksum    bool
+	WholeFile         bool
 
 	Inplace     bool
 	KeepPartial bool
