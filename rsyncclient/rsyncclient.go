@@ -123,7 +123,7 @@ type Result struct {
 // [Client.ServerCommandOptions] to the server and then arrange for two
 // [io.ReadWriter] connections between client and server.
 func (c *Client) Run(ctx context.Context, conn io.ReadWriter, paths []string) (*Result, error) {
-	stats, fileList, err := maincmd.ClientRun(c.osenv, c.opts, conn, paths, c.negotiate)
+	stats, fileList, err := maincmd.ClientRun(ctx, c.osenv, c.opts, conn, paths, c.negotiate)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +138,7 @@ func (c *Client) Run(ctx context.Context, conn io.ReadWriter, paths []string) (*
 // establish the connection yourself, e.g. via the [golang.org/x/crypto/ssh]
 // package.
 func (c *Client) RunDaemon(ctx context.Context, conn io.ReadWriter, remotePath string, paths []string) (*Result, error) {
-	done, err := maincmd.StartInbandExchange(c.osenv, c.opts, conn, remotePath)
+	done, err := maincmd.StartInbandExchange(ctx, c.osenv, c.opts, conn, remotePath)
 	if err != nil {
 		return nil, err
 	}

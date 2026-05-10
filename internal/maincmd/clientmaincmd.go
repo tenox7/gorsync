@@ -137,7 +137,7 @@ func rsyncMain(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 
 	negotiate := true
 	if daemonConnection != 0 {
-		done, err := StartInbandExchange(osenv, opts, conn, path)
+		done, err := StartInbandExchange(ctx, osenv, opts, conn, path)
 		if err != nil {
 			return nil, err
 		}
@@ -146,7 +146,7 @@ func rsyncMain(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 		}
 		negotiate = false // already done
 	}
-	stats, _, err := ClientRun(osenv, opts, conn, paths, negotiate)
+	stats, _, err := ClientRun(ctx, osenv, opts, conn, paths, negotiate)
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +254,9 @@ func doCmd(osenv *rsyncos.Env, opts *rsyncopts.Options, machine, user, path stri
 }
 
 // rsync/main.c:client_run
-func ClientRun(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriter, paths []string, negotiate bool) (*rsyncstats.TransferStats, []rsync.FileInfo, error) {
+func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriter, paths []string, negotiate bool) (*rsyncstats.TransferStats, []rsync.FileInfo, error) {
+	conn, stop := rsyncwire.WrapCtx(ctx, conn)
+	defer stop()
 	crd := &rsyncwire.CountingReader{R: conn}
 	cwr := &rsyncwire.CountingWriter{W: conn}
 	c := &rsyncwire.Conn{
