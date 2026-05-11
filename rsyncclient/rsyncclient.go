@@ -36,6 +36,16 @@ func WithStderr(stderr io.Writer) Option {
 	})
 }
 
+// WithStdout makes the [Client] write to the specified stdout instead of
+// [os.Stdout]. Useful when embedding rsync inside a TUI or other program
+// that owns os.Stdout — for example --dry-run prints each filename the
+// receiver would have written.
+func WithStdout(stdout io.Writer) Option {
+	return clientOptionFunc(func(c *Client) {
+		c.osenv.Stdout = stdout
+	})
+}
+
 // WithSender enables sender mode (receiver by default).
 func WithSender() Option {
 	return clientOptionFunc(func(c *Client) {
