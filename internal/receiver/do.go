@@ -44,6 +44,12 @@ func (rt *Transfer) deleteFiles(fileList []*File) error {
 			if findInFileList(fileList, path) {
 				return nil
 			}
+			if rt.Excluded != nil && rt.Excluded(path) {
+				if rt.Opts.Verbose {
+					rt.Logger.Printf("  protecting %s (filter rule)", path)
+				}
+				return nil
+			}
 			if rt.Opts.Verbose {
 				rt.Logger.Printf("  deleting %s", path)
 			}

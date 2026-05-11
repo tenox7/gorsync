@@ -528,6 +528,7 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 			return err
 		}
 		s.logger.Printf("exclusion list read (entries: %d)", len(exclusionList.Filters))
+		rt.Excluded = exclusionList.Excluded
 	}
 
 	// receive file list

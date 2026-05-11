@@ -2,6 +2,7 @@ package sender
 
 import (
 	"io"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -32,6 +33,21 @@ func (l *filterRuleList) matches(name string) bool {
 		if fr.matches(name) {
 			return true
 		}
+	}
+	return false
+}
+
+// Excluded reports whether name is protected from deletion by the first
+// matching rule (i.e. the rule is an exclude). Used by the receiver when
+// walking the destination tree under --delete: paths matched by an exclude
+// rule must be preserved. An include rule that matches first means the path
+// is eligible for deletion per the normal source-fileList check.
+func (l *filterRuleList) Excluded(name string) bool {
+	for _, fr := range l.Filters {
+		if !fr.matches(name) {
+			continue
+		}
+		return fr.flag&filtruleInclude == 0
 	}
 	return false
 }
@@ -75,14 +91,20 @@ type filterRule struct {
 
 // exclude.c:rule_matches
 func (fr *filterRule) matches(name string) bool {
+	pat := fr.pattern
+	anchored := strings.HasPrefix(pat, "/")
+	if anchored {
+		pat = strings.TrimPrefix(pat, "/")
+	}
+	candidate := name
+	if !anchored && !strings.ContainsRune(pat, '/') {
+		candidate = filepath.Base(name)
+	}
 	if fr.flag&filtruleWild != 0 {
-		panic("wildcard filter rules not yet implemented")
+		ok, _ := path.Match(pat, candidate)
+		return ok
 	}
-	if !strings.ContainsRune(fr.pattern, '/') &&
-		fr.flag&filtruleWild == 0 {
-		name = filepath.Base(name)
-	}
-	return fr.pattern == name
+	return pat == candidate
 }
 
 // exclude.c:parse_filter_str / exclude.c:parse_rule_tok

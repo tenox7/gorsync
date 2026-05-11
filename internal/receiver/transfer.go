@@ -47,6 +47,11 @@ type Transfer struct {
 	Env      *rsyncos.Env
 	Progress progress.Printer
 
+	// Excluded, if non-nil, reports whether a destination path (relative to
+	// DestRoot, slash-separated) is protected from deletion by the
+	// client-supplied filter list. Consulted only when DeleteMode is on.
+	Excluded func(name string) bool
+
 	// state
 	Conn            *rsyncwire.Conn
 	Seed            int32
