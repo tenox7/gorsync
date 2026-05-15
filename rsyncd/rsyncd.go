@@ -462,6 +462,8 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 			KeepPartial: opts.KeepPartial(),
 			PartialDir:  opts.PartialDir(),
 
+			AppendMode: opts.AppendMode(),
+
 			InfoGTE:  opts.InfoGTE,
 			DebugGTE: opts.DebugGTE,
 		},

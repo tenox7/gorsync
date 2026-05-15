@@ -46,7 +46,7 @@ func (o *Options) ServerOptions() []string {
 	// if (copy_links)
 	// 	argstr[x++] = 'L';
 
-	if o.whole_file > 0 {
+	if o.whole_file > 0 && o.append_mode == 0 {
 		argstr += "W"
 	}
 	// /* We don't need to send --no-whole-file, because it's the
@@ -168,6 +168,13 @@ func (o *Options) ServerOptions() []string {
 
 	if o.partial_dir != "" {
 		sargv = append(sargv, "--partial-dir="+o.partial_dir)
+	}
+
+	switch o.append_mode {
+	case 1:
+		sargv = append(sargv, "--append")
+	case 2:
+		sargv = append(sargv, "--append-verify")
 	}
 
 	// if (force_delete)

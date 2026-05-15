@@ -2,6 +2,7 @@ package receiver
 
 import (
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -105,6 +106,18 @@ func (p *pendingFile) Write(b []byte) (int, error) {
 	n, err := p.f.Write(b)
 	p.written += int64(n)
 	return n, err
+}
+
+// SeekToAppendOffset positions the destination file at offset and accounts for
+// the prefix bytes in the written counter so a subsequent Truncate(p.written)
+// in CloseAtomicallyReplace doesn't lop off the existing prefix. Used by the
+// --append receiver path.
+func (p *pendingFile) SeekToAppendOffset(offset int64) error {
+	if _, err := p.f.Seek(offset, io.SeekStart); err != nil {
+		return err
+	}
+	p.written = offset
+	return nil
 }
 
 // CloseAtomicallyReplace finalizes the transfer.

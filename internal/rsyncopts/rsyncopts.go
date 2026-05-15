@@ -734,6 +734,7 @@ func (o *Options) AlwaysChecksum() bool       { return o.always_checksum != 0 }
 func (o *Options) WholeFile() bool             { return o.whole_file > 0 }
 func (o *Options) IgnoreTimes() bool          { return o.ignore_times != 0 }
 func (o *Options) Inplace() bool              { return o.inplace != 0 }
+func (o *Options) AppendMode() int            { return o.append_mode }
 func (o *Options) KeepPartial() bool          { return o.keep_partial != 0 || o.inplace != 0 }
 func (o *Options) PartialDir() string         { return o.partial_dir }
 func (o *Options) OutputMOTD() bool           { return o.output_motd != 0 }
@@ -907,9 +908,9 @@ func (o *Options) gokrazyTable() []poptOption {
 		//{"preallocate", "", POPT_ARG_NONE, &o.preallocate_files, 0},
 		{"inplace", "", POPT_ARG_VAL, &o.inplace, 1},
 		{"no-inplace", "", POPT_ARG_VAL, &o.inplace, 0},
-		//{"append", "", POPT_ARG_NONE, nil, OPT_APPEND},
-		//{"append-verify", "", POPT_ARG_VAL, &o.append_mode, 2},
-		//{"no-append", "", POPT_ARG_VAL, &o.append_mode, 0},
+		{"append", "", POPT_ARG_NONE, nil, OPT_APPEND},
+		{"append-verify", "", POPT_ARG_VAL, &o.append_mode, 2},
+		{"no-append", "", POPT_ARG_VAL, &o.append_mode, 0},
 		//{"del", "", POPT_ARG_NONE, &o.delete_during, 0},
 		{"delete", "", POPT_ARG_NONE, &o.delete_mode, 0},
 		//{"delete-before", "", POPT_ARG_NONE, &o.delete_before, 0},
@@ -1491,7 +1492,7 @@ func (pc *Context) ParseArguments(osenv *rsyncos.Env, args []string) error {
 			return errNotYetImplemented
 
 		case OPT_APPEND:
-			return errNotYetImplemented
+			opts.append_mode = 1
 
 		case OPT_LINK_DEST,
 			OPT_COPY_DEST,

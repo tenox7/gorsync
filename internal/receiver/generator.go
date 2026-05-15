@@ -302,6 +302,20 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		return nil
 	}
 
+	if rt.Opts.AppendMode > 0 && st.Size() > 0 && st.Size() < f.Length {
+		if rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
+			rt.Logger.Printf("append: sending prefix sum head for %s (%d/%d bytes)", f.Name, st.Size(), f.Length)
+		}
+		if err := rt.Conn.WriteInt32(int32(idx)); err != nil {
+			return err
+		}
+		// Match rsync/generator.c: in --append mode, send only the sum head;
+		// the sender skips block-match verification and infers the prefix size
+		// from ChecksumCount * BlockLength + RemainderLength.
+		sh := rsynccommon.SumSizesSqroot(st.Size())
+		return sh.WriteTo(rt.Conn)
+	}
+
 	if rt.Opts.WholeFile {
 		return requestFullFile()
 	}

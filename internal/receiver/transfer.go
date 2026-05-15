@@ -34,6 +34,13 @@ type TransferOpts struct {
 	KeepPartial bool
 	PartialDir  string
 
+	// AppendMode controls --append / --append-verify on the receiver. 0 = off,
+	// 1 = --append (trust existing prefix), 2 = --append-verify (checksum
+	// verify the prefix on the sender). Only AppendMode > 0 changes the
+	// generator's request: it sends sums for the existing partial prefix so
+	// the sender knows to skip those bytes.
+	AppendMode int
+
 	InfoGTE  func(rsyncopts.InfoLevel, uint16) bool
 	DebugGTE func(rsyncopts.DebugLevel, uint16) bool
 }

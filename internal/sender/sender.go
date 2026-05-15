@@ -48,7 +48,11 @@ func (st *Transfer) SendFiles(fileList *fileList) error {
 		fl := fileList.Files[fileIndex]
 		st.Progress.Reset(uint64(fl.Length))
 
-		head, err := st.receiveSums()
+		// In phase 0 with --append, the receiver sends only the sum head; in
+		// phase 1 (the redo pass) the receiver reverts to the normal protocol
+		// and sends real per-block sums. receiveSums needs to know which.
+		appendShortcut := phase == 0 && st.Opts.AppendMode() > 0
+		head, err := st.receiveSumsForPhase(appendShortcut)
 		if err != nil {
 			return err
 		}
@@ -83,10 +87,14 @@ func (st *Transfer) SendFiles(fileList *fileList) error {
 		}
 
 		st.lastMatch = 0
-		if len(head.Sums) == 0 {
+		switch {
+		case len(head.Sums) == 0:
 			// fast path: send the whole file
 			err = st.sendFile(fileIndex, fl)
-		} else {
+		case appendShortcut:
+			// receiver has a partial prefix; stream only the trailing bytes
+			err = st.sendFileAppend(head, fileIndex, fl)
+		default:
 			err = st.hashSearch(targets, tagTable, head, fileIndex, fl)
 		}
 		if err != nil {
@@ -116,12 +124,34 @@ func (st *Transfer) SendFiles(fileList *fileList) error {
 
 // rsync/sender.c:receive_sums()
 func (st *Transfer) receiveSums() (rsync.SumHead, error) {
+	return st.receiveSumsForPhase(false)
+}
+
+// receiveSumsForPhase reads the receiver's sum head and (unless appendShortcut
+// is set) the per-block sums. In --append phase 0, rsync's generator emits
+// only the sum head and skips the per-block sums (see rsync/generator.c —
+// `if (append_mode > 0 && f_copy < 0) return 0;`). Phase 1 (the redo pass)
+// reverts to full sums even when --append is in effect.
+func (st *Transfer) receiveSumsForPhase(appendShortcut bool) (rsync.SumHead, error) {
 	var head rsync.SumHead
 	if err := head.ReadFrom(st.Conn); err != nil {
 		return head, err
 	}
 	var offset int64
 	head.Sums = make([]rsync.SumBuf, int(head.ChecksumCount))
+	if appendShortcut {
+		for i := int32(0); i < head.ChecksumCount; i++ {
+			sb := rsync.SumBuf{Index: i, Offset: offset}
+			if i == head.ChecksumCount-1 && head.RemainderLength != 0 {
+				sb.Len = int64(head.RemainderLength)
+			} else {
+				sb.Len = int64(head.BlockLength)
+			}
+			offset += sb.Len
+			head.Sums[i] = sb
+		}
+		return head, nil
+	}
 	for i := int32(0); i < head.ChecksumCount; i++ {
 		shortChecksum, err := st.Conn.ReadInt32()
 		if err != nil {
