@@ -61,6 +61,28 @@ func (st *Transfer) sendFileAppend(head rsync.SumHead, fileIndex int32, fl file)
 	h := md4.New()
 	binary.Write(h, binary.LittleEndian, st.Seed)
 
+	// Phase 1 (the redo pass) expects MD4 of the *whole* source file rather
+	// than just the appended tail. Kick that off in parallel here so phase 1
+	// doesn't have to re-read the source and so the sender never has to call
+	// hashSearch — see sendFileAppendVerify.
+	fullSumCh := st.appendSumPending(fileIndex)
+	go func() {
+		fh := md4.New()
+		binary.Write(fh, binary.LittleEndian, st.Seed)
+		f2, err := fl.source.Open(fl.path)
+		if err != nil {
+			fullSumCh <- nil
+			return
+		}
+		defer f2.Close()
+		var buf [chunkSize]byte
+		if _, err := io.CopyBuffer(fh, f2, buf[:]); err != nil {
+			fullSumCh <- nil
+			return
+		}
+		fullSumCh <- fh.Sum(nil)
+	}()
+
 	if _, err := f.Seek(prefixSize, io.SeekStart); err != nil {
 		return err
 	}

@@ -2,6 +2,7 @@ package sender
 
 import (
 	"io"
+	"sync"
 
 	"github.com/gokrazy/rsync/internal/log"
 	"github.com/gokrazy/rsync/internal/progress"
@@ -45,6 +46,30 @@ type Transfer struct {
 	Conn      *rsyncwire.Conn
 	Seed      int32
 	lastMatch int64
+
+	// appendFullSums caches the MD4-of-full-source for files transferred in
+	// --append phase 0, so phase 1's verify pass can echo it without
+	// recomputing or doing delta. Keyed by file index. The channel signals
+	// completion (and carries the MD4 bytes).
+	appendFullSumsMu sync.Mutex
+	appendFullSums   map[int32]chan []byte
+}
+
+// appendSumPending returns (and lazily creates) a channel that receives the
+// MD4 of file fileIndex's full local source. Used by sendFileAppend to publish
+// the value and sendFileAppendVerify to consume it.
+func (st *Transfer) appendSumPending(fileIndex int32) chan []byte {
+	st.appendFullSumsMu.Lock()
+	defer st.appendFullSumsMu.Unlock()
+	if st.appendFullSums == nil {
+		st.appendFullSums = make(map[int32]chan []byte)
+	}
+	ch, ok := st.appendFullSums[fileIndex]
+	if !ok {
+		ch = make(chan []byte, 1)
+		st.appendFullSums[fileIndex] = ch
+	}
+	return ch
 }
 
 //func (rt *Transfer) listOnly() bool { return rt.Dest == "" }

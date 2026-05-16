@@ -94,6 +94,9 @@ func (st *Transfer) SendFiles(fileList *fileList) error {
 		case appendShortcut:
 			// receiver has a partial prefix; stream only the trailing bytes
 			err = st.sendFileAppend(head, fileIndex, fl)
+		case phase > 0 && st.Opts.AppendMode() > 0:
+			// phase-1 redo on an --append transfer: respond without delta
+			err = st.sendFileAppendVerify(head, fileIndex, fl)
 		default:
 			err = st.hashSearch(targets, tagTable, head, fileIndex, fl)
 		}
