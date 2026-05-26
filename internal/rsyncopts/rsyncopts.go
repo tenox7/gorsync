@@ -742,6 +742,14 @@ func (o *Options) RsyncPort() int             { return o.rsync_port }
 func (o *Options) PasswordFile() string       { return o.password_file }
 func (o *Options) XferDirs() int              { return o.xfer_dirs }
 func (o *Options) FilterRules() []string      { return o.filterRules }
+
+// ReceiverWantsFilterList mirrors rsync/exclude.c:send_filter_list: the sender
+// transmits its filter list (so the receiver can protect matched paths from
+// --delete) only when the receiver will read it. ProtocolVersion is always 27
+// (< 29) here, so --delete-excluded suppresses the exchange.
+func (o *Options) ReceiverWantsFilterList() bool {
+	return o.delete_mode != 0 && o.delete_excluded == 0
+}
 func (o *Options) Progress() bool {
 	return o.info[INFO_PROGRESS] > 0
 }

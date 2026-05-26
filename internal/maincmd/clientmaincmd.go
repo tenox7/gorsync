@@ -327,6 +327,24 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 			}
 		}
 
+		// rsync/main.c:client_run (am_sender): send_filter_list precedes
+		// send_file_list. The receiver's recv_filter_list reads it only when it
+		// wants the list (delete mode), so gate the write the same way to stay
+		// in sync with a stock rsync daemon.
+		if opts.ReceiverWantsFilterList() {
+			for _, rule := range opts.FilterRules() {
+				if err := c.WriteInt32(int32(len(rule))); err != nil {
+					return nil, nil, err
+				}
+				if err := c.WriteString(rule); err != nil {
+					return nil, nil, err
+				}
+			}
+			if err := c.WriteInt32(0); err != nil {
+				return nil, nil, err
+			}
+		}
+
 		stats, err := st.Do(crd, cwr, FileSystemRoot, paths, nil)
 		if err != nil {
 			return nil, nil, err

@@ -144,10 +144,11 @@ func (o *Options) ServerOptions() []string {
 	// 	args[ac++] = arg;
 	// }
 
-	// if (delete_excluded)
-	// 	args[ac++] = "--delete-excluded";
-	// else if (delete_mode)
-	// 	args[ac++] = "--delete";
+	if o.delete_excluded != 0 {
+		sargv = append(sargv, "--delete-excluded")
+	} else if o.delete_mode != 0 {
+		sargv = append(sargv, "--delete")
+	}
 
 	// if (size_only)
 	// 	args[ac++] = "--size-only";
