@@ -47,9 +47,16 @@ func (fl *fileList) Close() {
 	fl.Sources = nil
 }
 
-// rsync/rsync.h defines chunkSize as 32 * 1024, but increasing it to 256K
-// increases throughput with “tridge” rsync as client by 50 Mbit/s.
-const chunkSize = 256 * 1024
+// chunkSize is rsync's CHUNK_SIZE (rsync/rsync.h): the maximum length of a
+// single literal (uncompressed) token on the wire. A receiver rejects any
+// literal token longer than this ("invalid uncompressed token length"), so it
+// is a wire-protocol constant and must not be increased.
+const chunkSize = 32 * 1024
+
+// readBufSize is how much we read from the local source per syscall while
+// sending; larger than chunkSize for I/O efficiency. The data is still split
+// into chunkSize-sized wire tokens.
+const readBufSize = 256 * 1024
 
 var (
 	lookupOnce      sync.Once

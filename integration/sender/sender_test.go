@@ -186,6 +186,47 @@ func TestSender(t *testing.T) {
 	}
 }
 
+// TestSenderLargeFile pushes a file larger than rsync's CHUNK_SIZE (32 KiB), so
+// the sender must split the literal data into multiple wire tokens. Regression
+// test for emitting a single oversized token, which a conformant receiver
+// rejects with "invalid uncompressed token length".
+func TestSenderLargeFile(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	source := filepath.Join(tmp, "source")
+	dest := filepath.Join(tmp, "dest")
+
+	if err := os.MkdirAll(source, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// ~1.1 MiB: spans many 32 KiB tokens and several read buffers, with a
+	// non-aligned remainder in the final token.
+	want := bytes.Repeat([]byte("gokrazy rsync token framing!\n"), 40000)
+	if err := os.WriteFile(filepath.Join(source, "large"), want, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// start a server to sync to
+	srv := rsynctest.New(t, rsynctest.WritableInteropModule(dest))
+
+	args := []string{
+		"gokr-rsync",
+		"-aW", // whole-file transfer, exercising sendFile()
+		source + "/",
+		"rsync://localhost:" + srv.Port + "/interop/",
+	}
+	rsynctest.Run(t, args...)
+
+	got, err := os.ReadFile(filepath.Join(dest, "large"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(want, got) {
+		t.Fatalf("large file mismatch: got %d bytes, want %d bytes", len(got), len(want))
+	}
+}
+
 // like TestSender, but without a trailing slash, i.e. do not copy directory
 // contents, but the directory itself.
 func TestSenderNoSlash(t *testing.T) {

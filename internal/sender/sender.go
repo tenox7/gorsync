@@ -184,10 +184,6 @@ func (st *Transfer) receiveSumsForPhase(appendShortcut bool) (rsync.SumHead, err
 }
 
 func (st *Transfer) sendFile(fileIndex int32, fl file) error {
-	// rsync/rsync.h defines chunkSize as 32 * 1024, but increasing it to 256K
-	// increases throughput with “tridge” rsync as client by 50 Mbit/s.
-	const chunkSize = 256 * 1024
-
 	f, err := fl.source.Open(fl.path)
 	if err != nil {
 		return err
@@ -231,7 +227,7 @@ func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 			return err
 		}
 		defer f.Close()
-		var buf [chunkSize]byte
+		var buf [readBufSize]byte
 		if _, err := io.CopyBuffer(h, f, buf[:]); err != nil {
 			return err
 		}
@@ -239,7 +235,7 @@ func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 	})
 
 	offset := 0
-	buf := make([]byte, chunkSize)
+	buf := make([]byte, readBufSize)
 	for {
 		if st.Opts.InfoGTE(rsyncopts.INFO_PROGRESS, 1) {
 			st.Progress.MaybeShow(uint64(offset), false)
@@ -251,16 +247,20 @@ func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 			}
 			return err
 		}
-		chunk := buf[:n]
-		// chunk size (“rawtok” variable in openrsync)
-		if err := st.Conn.WriteInt32(int32(len(chunk))); err != nil {
-			return err
+		// chunk size (“rawtok” variable in openrsync); split into wire tokens
+		// no larger than chunkSize, which the receiver caps at rsync's CHUNK_SIZE.
+		data := buf[:n]
+		for len(data) > 0 {
+			m := min(len(data), chunkSize)
+			if err := st.Conn.WriteInt32(int32(m)); err != nil {
+				return err
+			}
+			if _, err := st.Conn.Writer.Write(data[:m]); err != nil {
+				return err
+			}
+			data = data[m:]
+			offset += m
 		}
-		n, err = st.Conn.Writer.Write(chunk)
-		if err != nil {
-			return err
-		}
-		offset += n
 	}
 	if st.Opts.InfoGTE(rsyncopts.INFO_PROGRESS, 1) {
 		st.Progress.Show(uint64(offset), true)

@@ -75,7 +75,7 @@ func (st *Transfer) sendFileAppend(head rsync.SumHead, fileIndex int32, fl file)
 			return
 		}
 		defer f2.Close()
-		var buf [chunkSize]byte
+		var buf [readBufSize]byte
 		if _, err := io.CopyBuffer(fh, f2, buf[:]); err != nil {
 			fullSumCh <- nil
 			return
@@ -86,7 +86,7 @@ func (st *Transfer) sendFileAppend(head rsync.SumHead, fileIndex int32, fl file)
 	if _, err := f.Seek(prefixSize, io.SeekStart); err != nil {
 		return err
 	}
-	buf := make([]byte, chunkSize)
+	buf := make([]byte, readBufSize)
 	offset := prefixSize
 	for {
 		if st.Opts.InfoGTE(rsyncopts.INFO_PROGRESS, 1) {
@@ -100,13 +100,19 @@ func (st *Transfer) sendFileAppend(head rsync.SumHead, fileIndex int32, fl file)
 			break
 		}
 		chunk := buf[:n]
-		if err := st.Conn.WriteInt32(int32(len(chunk))); err != nil {
-			return err
-		}
-		if _, err := st.Conn.Writer.Write(chunk); err != nil {
-			return err
-		}
 		h.Write(chunk)
+		// Split into wire tokens no larger than chunkSize (rsync's CHUNK_SIZE);
+		// longer literal tokens are rejected by the receiver.
+		for len(chunk) > 0 {
+			m := min(len(chunk), chunkSize)
+			if err := st.Conn.WriteInt32(int32(m)); err != nil {
+				return err
+			}
+			if _, err := st.Conn.Writer.Write(chunk[:m]); err != nil {
+				return err
+			}
+			chunk = chunk[m:]
+		}
 		offset += int64(n)
 	}
 	if st.Opts.InfoGTE(rsyncopts.INFO_PROGRESS, 1) {
