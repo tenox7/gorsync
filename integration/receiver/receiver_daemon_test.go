@@ -37,8 +37,9 @@ func TestDaemonReceiverSync(t *testing.T) {
 		// will start listing individual chunk matches.
 		"-v", "-v", "-v", // "-v",
 		"--port="+srv.Port,
-		source+"/", // copy contents of source
+		filepath.Base(source)+"/", // copy contents of source (relative to rsync.Dir)
 		"rsync://localhost/interop/")
+	rsync.Dir = filepath.Dir(source)
 	rsync.Env = append(os.Environ(),
 		// Ensure rsync does not localize decimal separators and fractional
 		// points based on the current locale:
@@ -102,8 +103,9 @@ func TestDaemonReceiverSyncSubdir(t *testing.T) {
 				// will start listing individual chunk matches.
 				"-v", "-v", "-v", // "-v",
 				"--port="+srv.Port,
-				source+"/", // copy contents of source
+				filepath.Base(source)+"/", // copy contents of source (relative to rsync.Dir)
 				tt.rsyncTarget)
+			rsync.Dir = filepath.Dir(source)
 			rsync.Env = append(os.Environ(),
 				// Ensure rsync does not localize decimal separators and fractional
 				// points based on the current locale:
@@ -169,8 +171,9 @@ func TestDaemonReceiverSyncSubdirTraversal(t *testing.T) {
 				// will start listing individual chunk matches.
 				"-v", "-v", "-v", // "-v",
 				"--port="+srv.Port,
-				source+"/", // copy contents of source
+				filepath.Base(source)+"/", // copy contents of source (relative to rsync.Dir)
 				tt.rsyncTarget)
+			rsync.Dir = filepath.Dir(source)
 			rsync.Env = append(os.Environ(),
 				// Ensure rsync does not localize decimal separators and fractional
 				// points based on the current locale:
@@ -219,8 +222,9 @@ func TestDaemonReceiverDelete(t *testing.T) {
 			// will start listing individual chunk matches.
 			"-v", "-v", "-v", // "-v",
 			"--port="+srv.Port,
-			source+"/", // copy contents of source
+			filepath.Base(source)+"/", // copy contents of source (relative to rsync.Dir)
 			"rsync://localhost/interop/")
+		rsync.Dir = filepath.Dir(source)
 		rsync.Env = append(os.Environ(),
 			// Ensure rsync does not localize decimal separators and fractional
 			// points based on the current locale:
@@ -274,8 +278,9 @@ func TestDaemonReceiverSyncHardLinks(t *testing.T) {
 		// will start listing individual chunk matches.
 		"-v", "-v", "-v", // "-v",
 		"--port="+srv.Port,
-		source+"/", // copy contents of source
+		filepath.Base(source)+"/", // copy contents of source (relative to rsync.Dir)
 		"rsync://localhost/interop/")
+	rsync.Dir = filepath.Dir(source)
 	rsync.Env = append(os.Environ(),
 		// Ensure rsync does not localize decimal separators and fractional
 		// points based on the current locale:

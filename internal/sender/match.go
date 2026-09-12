@@ -105,6 +105,7 @@ Outer:
 			// strong signature in the signature table”
 			sum = (uint32(s1) & 0xFFFF) | (uint32(s2) << 16)
 			tagHits++
+			chainLen := 0
 			for ; j < int(head.ChecksumCount) && targets[j].tag == tag; j++ {
 				i := targets[j].index
 				// In --inplace mode the receiver writes directly to the
@@ -118,6 +119,11 @@ Outer:
 				}
 				if sum != head.Sums[i].Sum1 {
 					continue
+				}
+
+				chainLen++
+				if chainLen > 1024 {
+					break // https://github.com/RsyncProject/rsync/issues/217
 				}
 
 				l := int64(head.BlockLength)

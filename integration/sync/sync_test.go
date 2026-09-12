@@ -48,7 +48,8 @@ func TestSyncExtended(t *testing.T) {
 			"--checksum",
 			"--port="+srv.Port,
 			"rsync://localhost/interop/", // copy contents of source
-			dest)
+			filepath.Base(dest))
+		rsync.Dir = filepath.Dir(dest)
 		rsync.Env = append(os.Environ(),
 			// Ensure rsync does not localize decimal separators and fractional
 			// points based on the current locale:

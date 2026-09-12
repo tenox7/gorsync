@@ -40,7 +40,7 @@ func TestReceiverInplace(t *testing.T) {
 	})
 
 	args := []string{"-aH", "--inplace"}
-	srv.RunClient(t, args, []string{dest})
+	srv.RunClient(t, args, "./", []string{dest})
 
 	if err := rsynctest.DataFileMatches(destLarge, headPattern, bodyPattern, endPattern); err != nil {
 		t.Fatalf("after first sync: %v", err)
@@ -63,7 +63,7 @@ func TestReceiverInplace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv.RunClient(t, args, []string{dest})
+	srv.RunClient(t, args, "./", []string{dest})
 
 	if err := rsynctest.DataFileMatches(destLarge, headPattern, bodyPattern, endPattern); err != nil {
 		t.Fatalf("after second sync: %v", err)
@@ -100,7 +100,7 @@ func TestReceiverPartial(t *testing.T) {
 		Path: source,
 	})
 
-	srv.RunClient(t, []string{"-a", "--partial"}, []string{dest})
+	srv.RunClient(t, []string{"-a", "--partial"}, "./", []string{dest})
 
 	got, err := os.ReadFile(filepath.Join(dest, "hello"))
 	if err != nil {

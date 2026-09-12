@@ -55,9 +55,9 @@ jobs:
         echo "::endgroup::"
 
     - name: run tests (macos)
-      if: matrix.os == 'macos-14'
+      if: matrix.os == 'macos-latest'
       run: sudo go test -v ./...
 
     - name: run tests (windows)
       if: matrix.os == 'windows-latest'
-      run: go install ./cmd/...
+      run: go test -v ./...

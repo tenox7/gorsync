@@ -26,6 +26,10 @@ type outputMode struct {
 	// destination root) where partial files are placed on failure. Only
 	// consulted when KeepPartial is set and Inplace is not.
 	PartialDir string
+
+	// Fsync causes each written file to be fsynced before it is renamed
+	// into place (--fsync).
+	Fsync bool
 }
 
 const tempFilePerm os.FileMode = 0o600
@@ -128,7 +132,7 @@ func (p *pendingFile) CloseAtomicallyReplace() error {
 		if err := p.f.Truncate(p.written); err != nil {
 			return err
 		}
-		if err := p.f.Sync(); err != nil {
+		if err := p.sync(); err != nil {
 			return err
 		}
 		p.closed = true
@@ -138,7 +142,7 @@ func (p *pendingFile) CloseAtomicallyReplace() error {
 		p.done = true
 		return nil
 	}
-	if err := p.f.Sync(); err != nil {
+	if err := p.sync(); err != nil {
 		return err
 	}
 	p.closed = true
@@ -180,4 +184,13 @@ func (p *pendingFile) Cleanup() error {
 		target = filepath.Join(p.mode.PartialDir, filepath.Base(p.finalPath))
 	}
 	return p.root.Rename(p.tmpPath, target)
+}
+
+// sync flushes the file to stable storage, but only when --fsync was
+// requested: an unconditional fsync per file costs a lot of throughput.
+func (p *pendingFile) sync() error {
+	if !p.mode.Fsync {
+		return nil
+	}
+	return p.f.Sync()
 }

@@ -1,6 +1,7 @@
 package receiver
 
 import (
+	"io/fs"
 	"os"
 
 	"github.com/gokrazy/rsync/internal/log"
@@ -41,6 +42,9 @@ type TransferOpts struct {
 	// the sender knows to skip those bytes.
 	AppendMode int
 
+	// DoFsync fsyncs every written file (--fsync).
+	DoFsync bool
+
 	InfoGTE  func(rsyncopts.InfoLevel, uint16) bool
 	DebugGTE func(rsyncopts.DebugLevel, uint16) bool
 }
@@ -60,12 +64,18 @@ type Transfer struct {
 	Excluded func(name string) bool
 
 	// state
-	Conn            *rsyncwire.Conn
-	Seed            int32
-	IOErrors        int32
-	Users           map[int32]mapping
-	Groups          map[int32]mapping
-	retouchDirPerms bool
+	Conn         *rsyncwire.Conn
+	Seed         int32
+	IOErrors     int32
+	Users        map[int32]mapping
+	Groups       map[int32]mapping
+	defaultPerms fs.FileMode
+	retouchDirs  []retouchDir
+}
+
+type retouchDir struct {
+	f    *File
+	perm fs.FileMode
 }
 
 func (rt *Transfer) listOnly() bool { return rt.Dest == "" }

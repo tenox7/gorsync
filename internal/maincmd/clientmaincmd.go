@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -124,7 +125,7 @@ func rsyncMain(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 	}
 	defer rc.Close()
 	defer wc.Close()
-	conn := &readWriter{
+	conn := &readWriteCloser{
 		r: rc,
 		w: wc,
 	}
@@ -172,6 +173,13 @@ func doCmd(osenv *rsyncos.Env, opts *rsyncopts.Options, machine, user, path stri
 		// We use shlex.Split(), whereas rsync implements its own shell-style-like
 		// parsing. The nuances likely don’t matter to any users, and if so, users
 		// might prefer shell-style parsing.
+		//
+		// On Windows, double the backslashes first: shlex treats "\" as an escape
+		// character, which would otherwise mangle a native "-e C:\path\rsync.exe"
+		// into "C:pathrsync.exe".
+		if runtime.GOOS == "windows" {
+			cmd = strings.ReplaceAll(cmd, `\`, `\\`)
+		}
 		var err error
 		args, err = shlex.Split(cmd)
 		if err != nil {
@@ -254,7 +262,7 @@ func doCmd(osenv *rsyncos.Env, opts *rsyncopts.Options, machine, user, path stri
 }
 
 // rsync/main.c:client_run
-func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriter, paths []string, negotiate bool) (*rsyncstats.TransferStats, []rsync.FileInfo, error) {
+func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriteCloser, paths []string, negotiate bool) (*rsyncstats.TransferStats, []rsync.FileInfo, error) {
 	conn, stop := rsyncwire.WrapCtx(ctx, conn)
 	defer stop()
 	crd := &rsyncwire.CountingReader{R: conn}
@@ -292,7 +300,13 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 	// Update crd to track the multiplexed reader,
 	// but copy the number of bytes read.
 	crd = &rsyncwire.CountingReader{
-		R:         rd,
+		R: struct {
+			io.Reader
+			io.Closer
+		}{
+			Reader: rd,
+			Closer: conn,
+		},
 		BytesRead: crd.BytesRead,
 	}
 	c.Reader = crd
@@ -345,7 +359,7 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 			}
 		}
 
-		stats, err := st.Do(crd, cwr, FileSystemRoot, paths, nil)
+		stats, err := st.Do(crd, cwr, rsync.FileSystemRoot, paths, nil)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -381,6 +395,8 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 			PartialDir:  opts.PartialDir(),
 
 			AppendMode: opts.AppendMode(),
+
+			DoFsync: opts.DoFsync(),
 
 			InfoGTE:  opts.InfoGTE,
 			DebugGTE: opts.DebugGTE,

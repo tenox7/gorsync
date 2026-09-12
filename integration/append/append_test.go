@@ -29,6 +29,8 @@ type readWriter struct {
 	io.Writer
 }
 
+func (*readWriter) Close() error { return nil }
+
 func writeRandom(t *testing.T, path string, size int) []byte {
 	t.Helper()
 	buf := make([]byte, size)

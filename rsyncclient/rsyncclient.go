@@ -30,7 +30,7 @@ func (f clientOptionFunc) applyServer(s *Client) {
 
 // WithStderr makes the [Client] write to the specified stderr instead of
 // [os.Stderr].
-func WithStderr(stderr io.Writer) Option {
+func WithStderr(stderr io.WriteCloser) Option {
 	return clientOptionFunc(func(c *Client) {
 		c.osenv.Stderr = stderr
 	})
@@ -42,9 +42,16 @@ func WithStderr(stderr io.Writer) Option {
 // receiver would have written.
 func WithStdout(stdout io.Writer) Option {
 	return clientOptionFunc(func(c *Client) {
-		c.osenv.Stdout = stdout
+		c.osenv.Stdout = nopWriteCloser{stdout}
 	})
 }
+
+// nopWriteCloser lets callers pass a plain io.Writer: rsyncos.Env needs a
+// Closer for SSH session streams, but nothing in rsync closes stdout, and a
+// caller-owned writer is not ours to close anyway.
+type nopWriteCloser struct{ io.Writer }
+
+func (nopWriteCloser) Close() error { return nil }
 
 // WithSender enables sender mode (receiver by default).
 func WithSender() Option {
@@ -123,16 +130,17 @@ type Result struct {
 // instead, which will take care of starting rsync as a subprocess (locally or
 // remotely), or of connecting to an rsync daemon via TCP.
 //
-// The Run method operates on any kind of connection (using the [io.ReadWriter]
-// interface) and is meant to be used when you need more control over the
-// setup. For example, maybe you want to set up some custom tunneling to an
-// rsync process running deep in some remote cloud infrastructure.
+// The Run method operates on any kind of connection (using the
+// [io.ReadWriteCloser] interface) and is meant to be used when you need more
+// control over the setup. For example, maybe you want to set up some custom
+// tunneling to an rsync process running deep in some remote cloud
+// infrastructure.
 //
 // Or maybe you want to connect an rsync client and server to each other via a
 // custom RPC protocol. In that case, you will need to transport the
 // [Client.ServerCommandOptions] to the server and then arrange for two
-// [io.ReadWriter] connections between client and server.
-func (c *Client) Run(ctx context.Context, conn io.ReadWriter, paths []string) (*Result, error) {
+// [io.ReadWriteCloser] connections between client and server.
+func (c *Client) Run(ctx context.Context, conn io.ReadWriteCloser, paths []string) (*Result, error) {
 	stats, fileList, err := maincmd.ClientRun(ctx, c.osenv, c.opts, conn, paths, c.negotiate)
 	if err != nil {
 		return nil, err
@@ -147,7 +155,7 @@ func (c *Client) Run(ctx context.Context, conn io.ReadWriter, paths []string) (*
 // This method is useful when you want to connect to an rsync daemon, but
 // establish the connection yourself, e.g. via the [golang.org/x/crypto/ssh]
 // package.
-func (c *Client) RunDaemon(ctx context.Context, conn io.ReadWriter, remotePath string, paths []string) (*Result, error) {
+func (c *Client) RunDaemon(ctx context.Context, conn io.ReadWriteCloser, remotePath string, paths []string) (*Result, error) {
 	done, err := maincmd.StartInbandExchange(ctx, c.osenv, c.opts, conn, remotePath)
 	if err != nil {
 		return nil, err

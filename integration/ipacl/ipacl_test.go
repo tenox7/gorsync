@@ -55,7 +55,7 @@ func TestIPACL(t *testing.T) {
 	cfg, err := rsyncdconfig.FromString(`
 [[module]]
 name = "interop"
-path = "` + source + `"
+path = '` + source + `'
 acl = [
   "allow 192.168.1.0/24",
   "allow 2001:db8::1/32",
@@ -130,7 +130,8 @@ acl = [
 				"--dry-run",
 				"rsync://localhost/interop/", // copy contents of interop
 				//source+"/", // sync from local directory
-				dest) // directly into dest
+				filepath.Base(dest)) // directly into dest
+			rsync.Dir = filepath.Dir(dest)
 			rsync.Stdout = testlogger.New(t)
 			rsync.Stderr = &buf
 			if err := rsync.Run(); err != nil {

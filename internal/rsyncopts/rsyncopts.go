@@ -703,22 +703,23 @@ See https://github.com/gokrazy/rsync for updates, bug reports, and answers
 `
 }
 
-func (o *Options) ShellCommand() string       { return o.shell_cmd }
-func (o *Options) UpdateOnly() bool           { return o.update_only != 0 }
-func (o *Options) DryRun() bool               { return o.dry_run != 0 }
-func (o *Options) PreserveLinks() bool        { return o.preserve_links != 0 }
-func (o *Options) PreserveUid() bool          { return o.preserve_uid != 0 }
-func (o *Options) PreserveGid() bool          { return o.preserve_gid != 0 }
-func (o *Options) PreserveDevices() bool      { return o.preserve_devices != 0 }
-func (o *Options) PreserveMTimes() bool       { return o.preserve_mtimes != 0 }
-func (o *Options) PreservePerms() bool        { return o.preserve_perms != 0 }
-func (o *Options) PreserveSpecials() bool     { return o.preserve_specials != 0 }
-func (o *Options) PreserveHardLinks() bool    { return o.preserve_hard_links != 0 }
-func (o *Options) Recurse() bool              { return o.recurse != 0 }
-func (o *Options) Verbose() bool              { return o.verbose != 0 }
-func (o *Options) DeleteMode() bool           { return o.delete_mode != 0 }
-func (o *Options) Sender() bool               { return o.am_sender != 0 }
-func (o *Options) SetSender()                 { o.am_sender = 1 }
+func (o *Options) ShellCommand() string    { return o.shell_cmd }
+func (o *Options) UpdateOnly() bool        { return o.update_only != 0 }
+func (o *Options) DryRun() bool            { return o.dry_run != 0 }
+func (o *Options) PreserveLinks() bool     { return o.preserve_links != 0 }
+func (o *Options) PreserveUid() bool       { return o.preserve_uid != 0 }
+func (o *Options) PreserveGid() bool       { return o.preserve_gid != 0 }
+func (o *Options) PreserveDevices() bool   { return o.preserve_devices != 0 }
+func (o *Options) PreserveMTimes() bool    { return o.preserve_mtimes != 0 }
+func (o *Options) PreservePerms() bool     { return o.preserve_perms != 0 }
+func (o *Options) PreserveSpecials() bool  { return o.preserve_specials != 0 }
+func (o *Options) PreserveHardLinks() bool { return o.preserve_hard_links != 0 }
+func (o *Options) DoFsync() bool           { return o.do_fsync != 0 }
+func (o *Options) Recurse() bool           { return o.recurse != 0 }
+func (o *Options) Verbose() bool           { return o.verbose != 0 }
+func (o *Options) DeleteMode() bool        { return o.delete_mode != 0 }
+func (o *Options) Sender() bool            { return o.am_sender != 0 }
+func (o *Options) SetSender()              { o.am_sender = 1 }
 func (o *Options) SetListOnly() {
 	o.list_only = 1
 	if o.recurse == 0 {
@@ -731,7 +732,7 @@ func (o *Options) Server() bool               { return o.am_server != 0 }
 func (o *Options) Daemon() bool               { return o.am_daemon != 0 }
 func (o *Options) ConnectTimeoutSeconds() int { return o.connect_timeout }
 func (o *Options) AlwaysChecksum() bool       { return o.always_checksum != 0 }
-func (o *Options) WholeFile() bool             { return o.whole_file > 0 }
+func (o *Options) WholeFile() bool            { return o.whole_file > 0 }
 func (o *Options) IgnoreTimes() bool          { return o.ignore_times != 0 }
 func (o *Options) Inplace() bool              { return o.inplace != 0 }
 func (o *Options) AppendMode() int            { return o.append_mode }
@@ -996,7 +997,7 @@ func (o *Options) gokrazyTable() []poptOption {
 		//{"no-backup", "", POPT_ARG_VAL, &o.make_backups, 0},
 		//{"backup-dir", "", POPT_ARG_STRING, &o.backup_dir, 0},
 		//{"suffix", "", POPT_ARG_STRING, &o.backup_suffix, 0},
-		//{"list-only", "", POPT_ARG_VAL, &o.list_only, 2},
+		{"list-only", "", POPT_ARG_VAL, &o.list_only, 2},
 		//{"read-batch", "", POPT_ARG_STRING, &o.batch_name, OPT_READ_BATCH},
 		//{"write-batch", "", POPT_ARG_STRING, &o.batch_name, OPT_WRITE_BATCH},
 		//{"only-write-batch", "", POPT_ARG_STRING, &o.batch_name, OPT_ONLY_WRITE_BATCH},
@@ -1020,7 +1021,7 @@ func (o *Options) gokrazyTable() []poptOption {
 		//{"no-timeout", "", POPT_ARG_VAL, &o.io_timeout, 0},
 		{"contimeout", "", POPT_ARG_INT, &o.connect_timeout, 0},
 		{"no-contimeout", "", POPT_ARG_VAL, &o.connect_timeout, 0},
-		//{"fsync", "", POPT_ARG_NONE, &o.do_fsync, 0},
+		{"fsync", "", POPT_ARG_NONE, &o.do_fsync, 0},
 		//{"stop-after", "", POPT_ARG_STRING, nil, OPT_STOP_AFTER},
 		//{"time-limit", "", POPT_ARG_STRING, nil, OPT_STOP_AFTER}, /* earlier stop-after name */
 		//{"stop-at", "", POPT_ARG_STRING, nil, OPT_STOP_AT},

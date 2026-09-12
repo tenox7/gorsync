@@ -7,7 +7,7 @@ import (
 )
 
 type CtxConn struct {
-	Inner io.ReadWriter
+	Inner io.ReadWriteCloser
 	Ctx   context.Context
 }
 
@@ -25,19 +25,19 @@ func (c *CtxConn) Write(p []byte) (int, error) {
 	return c.Inner.Write(p)
 }
 
-func WrapCtx(ctx context.Context, conn io.ReadWriter) (io.ReadWriter, func()) {
+func (c *CtxConn) Close() error { return c.Inner.Close() }
+
+func WrapCtx(ctx context.Context, conn io.ReadWriteCloser) (io.ReadWriteCloser, func()) {
 	cc := &CtxConn{Inner: conn, Ctx: ctx}
 	done := make(chan struct{})
 	var once sync.Once
 	stop := func() { once.Do(func() { close(done) }) }
-	if closer, ok := conn.(io.Closer); ok {
-		go func() {
-			select {
-			case <-ctx.Done():
-				_ = closer.Close()
-			case <-done:
-			}
-		}()
-	}
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-done:
+		}
+	}()
 	return cc, stop
 }

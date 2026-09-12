@@ -1,9 +1,9 @@
 package receiver
 
 import (
-	"context"
 	"io/fs"
 	"os"
+	"sync"
 
 	"github.com/gokrazy/rsync/internal/rsyncopts"
 	"github.com/gokrazy/rsync/internal/rsyncstats"
@@ -72,44 +72,33 @@ func (rt *Transfer) deleteFiles(fileList []*File) error {
 	return nil
 }
 
-// waitFor calls f and waits for it to complete, but only until the specified
-// context is cancelled.
-func waitFor(ctx context.Context, f func() error) error {
-	errChan := make(chan error, 1)
-	go func() { errChan <- f() }()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case err := <-errChan:
-		return err
-	}
-}
-
 // rsync/main.c:do_recv
 func (rt *Transfer) Do(c *rsyncwire.Conn, fileList []*File, noReport bool) (*rsyncstats.TransferStats, error) {
+	rt.defaultPerms = defaultPerms()
+
 	if rt.Opts.DeleteMode {
 		if err := rt.deleteFiles(fileList); err != nil {
 			return nil, err
 		}
 	}
 
-	ctx := context.Background()
-	eg, ctx := errgroup.WithContext(ctx)
-	// Wrap both, the generator and the receiver goroutine, in waitFor() calls
-	// to ensure we don’t block on the generator when the receiver returns an
-	// error, or vice versa (instead, return and let the goroutine finish in the
-	// background).
-	eg.Go(func() error {
-		return waitFor(ctx, func() error { return rt.GenerateFiles(fileList) })
-	})
-	eg.Go(func() error {
-		return waitFor(ctx, func() error { return rt.RecvFiles(fileList) })
-	})
+	var eg errgroup.Group
+	// Close the connection as soon as either goroutine fails, so the other one
+	// stops blocking on a read or write that will never complete.
+	var closeOnce sync.Once
+	closeOnErr := func(err error) error {
+		if err != nil {
+			closeOnce.Do(func() { c.Close() })
+		}
+		return err
+	}
+	eg.Go(func() error { return closeOnErr(rt.GenerateFiles(fileList)) })
+	eg.Go(func() error { return closeOnErr(rt.RecvFiles(fileList)) })
 	if err := eg.Wait(); err != nil {
 		return nil, err
 	}
-	if rt.retouchDirPerms /* || rt.retouchDirTimes */ {
-		if err := rt.touchUpDirs(fileList); err != nil {
+	if len(rt.retouchDirs) > 0 /* || rt.retouchDirTimes */ {
+		if err := rt.touchUpDirs(); err != nil {
 			return nil, err
 		}
 	}

@@ -31,9 +31,9 @@ import (
 // Cmd represents an rsync invocation being prepared or run.
 type Cmd struct {
 	Args         []string
-	Stdin        io.Reader
-	Stdout       io.Writer
-	Stderr       io.Writer
+	Stdin        io.ReadCloser
+	Stdout       io.WriteCloser
+	Stderr       io.WriteCloser
 	DontRestrict bool
 
 	// DialContext, when set, replaces the default TCP dialer used to reach an

@@ -1,9 +1,11 @@
 package sender
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"os/user"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -50,7 +52,10 @@ func (fl *fileList) Close() {
 // chunkSize is rsync's CHUNK_SIZE (rsync/rsync.h): the maximum length of a
 // single literal (uncompressed) token on the wire. A receiver rejects any
 // literal token longer than this ("invalid uncompressed token length"), so it
-// is a wire-protocol constant and must not be increased.
+// is a wire-protocol constant and must not be increased. hashSearch also
+// depends on it: it declares a 256 KB window and then requests
+// 2*chunkSize+alignFudge from it, so raising chunkSize breaks transfers with
+// "file has changed mid-transfer" (upstream issue #53).
 const chunkSize = 32 * 1024
 
 // readBufSize is how much we read from the local source per syscall while
@@ -63,13 +68,13 @@ var (
 	lookupGroupOnce sync.Once
 )
 
+// getStrip operates on wire paths (slash space).
 func getStrip(requested string) string {
-	sep := string(os.PathSeparator)
-	if requested == sep {
+	if requested == "/" {
 		return ""
 	}
-	if strings.HasSuffix(requested, sep) {
-		return strings.TrimPrefix(filepath.Clean(requested), "/") + sep
+	if strings.HasSuffix(requested, "/") {
+		return strings.TrimPrefix(path.Clean(requested), "/") + "/"
 	}
 	return ""
 }
@@ -87,18 +92,36 @@ type scopedWalker struct {
 	localDir  string
 	requested string
 	strip     string
+	subdir    string
+	prefix    string
 }
 
 func (s *scopedWalker) walk() error {
 	if s.source == nil {
-		root, err := os.OpenRoot(s.localDir)
+		fi, err := os.Lstat(s.localDir)
 		if err != nil {
-			s.st.Logger.Printf("  OpenRoot(localDir=%q): %v", s.localDir, err)
-			s.ioError(err)
-			return nil
+			s.st.Logger.Printf("  Lstat(localDir=%q): %v", s.localDir, err)
+			return fmt.Errorf("i/o error: requested module path is not accessible")
 		}
-		s.source = newOSRootSource(root)
+		if fi.IsDir() {
+			root, err := os.OpenRoot(s.localDir)
+			if err != nil {
+				s.st.Logger.Printf("  OpenRoot(localDir=%q): %v", s.localDir, err)
+				return fmt.Errorf("i/o error: requested module path is not accessible")
+			}
+			s.source = newOSRootSource(root)
+		} else {
+			s.source = newSingleFileSource(s.localDir, fi)
+		}
 		s.fileList.Sources = append(s.fileList.Sources, s.source)
+	}
+	if s.subdir != "." {
+		sub, err := newSubSource(s.source, s.subdir)
+		if err != nil {
+			s.st.Logger.Printf("  newSubSource(subdir=%q): %v", s.subdir, err)
+			return fmt.Errorf("i/o error: requested module path is not accessible")
+		}
+		s.source = sub
 	}
 
 	rootname := s.requested
@@ -107,7 +130,7 @@ func (s *scopedWalker) walk() error {
 	if strings.HasPrefix(rootname, "/") {
 		rootname = "." + rootname
 	}
-	if err := fs.WalkDir(s.source.FS(), filepath.Clean(rootname), s.walkFn); err != nil {
+	if err := fs.WalkDir(s.source.FS(), path.Clean(rootname), s.walkFn); err != nil {
 		return err
 	}
 	return nil
@@ -142,12 +165,24 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 
 	name := path
 	if s.strip != "" {
-		name = strings.TrimPrefix(name, s.strip)
+		if path+"/" == s.strip {
+			// Transmit the top directory as ., like tridge rsync.
+			name = "."
+		} else {
+			name = strings.TrimPrefix(name, s.strip)
+		}
+	}
+	if s.prefix != "" {
+		if path == "." {
+			name = s.prefix
+		} else {
+			name = s.prefix + "/" + path
+		}
 	}
 	if opts.DebugGTE(rsyncopts.DEBUG_FLIST, 1) {
 		logger.Printf("Trim(path=%q) = %q", path, name)
 	}
-	if path == "." {
+	if path == "." && s.prefix == "" {
 		flags |= rsync.XMIT_TOP_DIR
 	}
 	// st.logger.Printf("flags for %q: %v", name, flags)
@@ -349,17 +384,25 @@ func (st *Transfer) SendFileList(localDir string, paths []string, excl *filterRu
 	}
 
 	for _, requested := range paths {
+		subdir := "."
+		prefix := ""
 		local := localDir
-		if local == "/" {
+		if local == rsync.FileSystemRoot {
 			// Implicit module (/) and absolute requested path (/tmp/foo/),
 			// turn the path into the local directory and request /.
-			local = requested
-			if strings.HasSuffix(requested, string(os.PathSeparator)) {
-				requested = "/"
+			local = filepath.Clean(requested)
+			if strings.HasSuffix(requested, "/") {
+
 			} else {
-				local = filepath.Dir(requested)
-				requested = filepath.Base(requested)
+				prefix = filepath.Base(requested)
 			}
+			requested = "/"
+		} else if !strings.HasSuffix(requested, "/") {
+			st.Logger.Printf("  handling requested=%q", requested)
+			clean := path.Clean(strings.TrimPrefix(requested, "/"))
+			subdir = path.Dir(clean)
+			requested = path.Base(clean)
+			st.Logger.Printf("  -> subdir=%q, requested=%q", subdir, requested)
 		}
 
 		if st.Opts.DebugGTE(rsyncopts.DEBUG_FLIST, 1) {
@@ -385,6 +428,8 @@ func (st *Transfer) SendFileList(localDir string, paths []string, excl *filterRu
 			localDir:  local,
 			requested: requested,
 			strip:     strip,
+			subdir:    subdir,
+			prefix:    prefix,
 		}
 		if err := sw.walk(); err != nil {
 			return nil, err

@@ -1,5 +1,5 @@
 //go:build !windows
 
-package maincmd
+package rsync
 
 const FileSystemRoot = "/"

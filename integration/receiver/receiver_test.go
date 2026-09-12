@@ -6,9 +6,9 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -16,7 +16,6 @@ import (
 	"github.com/gokrazy/rsync/internal/rsynctest"
 	"github.com/gokrazy/rsync/rsyncd"
 	"github.com/google/go-cmp/cmp"
-	"github.com/google/renameio/v2"
 )
 
 func TestMain(m *testing.M) {
@@ -118,7 +117,7 @@ func TestReceiver(t *testing.T) {
 		Path: source,
 	})
 	args := []string{"-aH"}
-	firstStats := srv.RunClient(t, args, []string{dest})
+	firstStats := srv.RunClient(t, args, "./", []string{dest})
 
 	{
 		want := []byte("world")
@@ -145,11 +144,11 @@ func TestReceiver(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		stt := st.Sys().(*syscall.Stat_t)
-		if got, want := int(stt.Uid), uid; got != want {
+		gotUID, gotGID := rsynctest.StatUidGid(t, st)
+		if got, want := gotUID, uid; got != want {
 			t.Errorf("unexpected uid: got %d, want %d", got, want)
 		}
-		if got, want := int(stt.Gid), gid; got != want {
+		if got, want := gotGID, gid; got != want {
 			t.Errorf("unexpected gid: got %d, want %d", got, want)
 		}
 	}
@@ -175,7 +174,7 @@ func TestReceiver(t *testing.T) {
 		rsynctest.VerifyDummyDeviceFiles(t, devices, filepath.Join(dest, "devices"))
 	}
 
-	incrementalStats := srv.RunClient(t, args, []string{dest})
+	incrementalStats := srv.RunClient(t, args, "./", []string{dest})
 	if incrementalStats.Written >= firstStats.Written {
 		t.Fatalf("incremental run unexpectedly not more efficient than first run: incremental wrote %d bytes, first wrote %d bytes", incrementalStats.Written, firstStats.Written)
 	}
@@ -192,11 +191,9 @@ func TestReceiver(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Replace the dest symlink to see if it will be restored
-	if err := renameio.Symlink("wrong", filepath.Join(dest, "hey")); err != nil {
-		t.Fatal(err)
-	}
+	rsynctest.ReplaceSymlink(t, "wrong", filepath.Join(dest, "hey"))
 
-	srv.RunClient(t, args, []string{dest})
+	srv.RunClient(t, args, "./", []string{dest})
 
 	{
 		want := []byte("world")
@@ -239,7 +236,7 @@ func TestReceiverSync(t *testing.T) {
 		Path: source,
 	})
 	args := []string{"-aH"}
-	firstStats := srv.RunClient(t, args, []string{dest})
+	firstStats := srv.RunClient(t, args, "./", []string{dest})
 	t.Logf("firstStats: %+v", firstStats)
 	//     receiver_test.go:211: firstStats: &{Read:91 Written:3146087 Size:3149824}
 
@@ -252,9 +249,56 @@ func TestReceiverSync(t *testing.T) {
 	// modify the large data file
 	rsynctest.WriteLargeDataFile(t, source, headPattern, bodyPattern, endPattern)
 
-	incrementalStats := srv.RunClient(t, args, []string{dest})
+	incrementalStats := srv.RunClient(t, args, "./", []string{dest})
 	t.Logf("incrementalStats: %+v", incrementalStats)
-	if got, want := incrementalStats.Written, int64(2*1024*1024); got >= want {
+	if got, want := incrementalStats.Written, int64(2*1024); got >= want {
+		t.Fatalf("rsync unexpectedly transferred more data than needed: got %d, want < %d", got, want)
+	}
+}
+
+func TestReceiverSyncPartial(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	source := filepath.Join(tmp, "source")
+	dest := filepath.Join(tmp, "dest")
+	destLarge := filepath.Join(dest, "large-data-file")
+
+	// Write 3 KB of data into source.
+	headPattern := []byte{0x11}
+	bodyPattern := []byte{0xbb}
+	endPattern := []byte{0xee}
+	rsynctest.WriteLargeDataFile(t, source, headPattern, bodyPattern, endPattern)
+
+	// start a server to sync from
+	srv := rsynctest.NewInMemory(t, rsyncd.Module{
+		Name: "interop",
+		Path: source,
+	})
+	args := []string{"-aH", "--verbose", "--debug=all4", "--partial", "--partial-dir=.gokrazy_rsync_partial"}
+	firstStats := srv.RunClient(t, args, "./", []string{dest})
+	t.Logf("firstStats: %+v", firstStats)
+	//     receiver_test.go:211: firstStats: &{Read:91 Written:3146087 Size:3149824}
+
+	if err := rsynctest.DataFileMatches(destLarge, headPattern, bodyPattern, endPattern); err != nil {
+		t.Fatal(err)
+	}
+
+	// Move the destination large data file out of dest
+	// (and into the --partial-dir)
+	// and run another --partial sync, meaning the delta transfer
+	// should not need to transfer any data.
+	partialDir := filepath.Join(dest, ".gokrazy_rsync_partial")
+	if err := os.MkdirAll(partialDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(destLarge, filepath.Join(partialDir, "large-data-file")); err != nil {
+		t.Fatal(err)
+	}
+
+	incrementalStats := srv.RunClient(t, args, "./", []string{dest})
+	t.Logf("incrementalStats: %+v", incrementalStats)
+	if got, want := incrementalStats.Written, int64(1024); got >= want {
 		t.Fatalf("rsync unexpectedly transferred more data than needed: got %d, want < %d", got, want)
 	}
 }
@@ -278,7 +322,7 @@ func TestReceiverSyncDelete(t *testing.T) {
 		Path: source,
 	})
 	args := []string{"-aH", "--delete"}
-	firstStats := srv.RunClient(t, args, []string{dest})
+	firstStats := srv.RunClient(t, args, "./", []string{dest})
 	t.Logf("firstStats: %+v", firstStats)
 	//     receiver_test.go:211: firstStats: &{Read:91 Written:3146087 Size:3149824}
 
@@ -300,11 +344,141 @@ func TestReceiverSyncDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv.RunClient(t, args, []string{dest})
+	srv.RunClient(t, args, "./", []string{dest})
 	for _, gone := range []string{extra, extraDir, extra2} {
 		if _, err := os.Stat(gone); !os.IsNotExist(err) {
 			t.Errorf("expected %s to be deleted, but it still exists", gone)
 		}
+	}
+}
+
+func TestReceiverNoPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skipf("Windows does not have permission bits")
+	}
+	t.Parallel()
+
+	tmp := t.TempDir()
+	source := filepath.Join(tmp, "source")
+	dest := filepath.Join(tmp, "dest")
+
+	if err := os.MkdirAll(source, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	sourcesub := filepath.Join(source, "subdir")
+	if err := os.MkdirAll(sourcesub, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// The explicit Chmod does not apply umask,
+	// whereas MkdirAll does apply umask.
+	if err := os.Chmod(sourcesub, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	mtime, err := time.Parse(time.RFC3339, "2009-11-10T23:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	createRegular := func(fn string, perm os.FileMode) {
+		if err := os.WriteFile(fn, []byte("hello"), perm); err != nil {
+			t.Fatal(err)
+		}
+		// The explicit Chmod does not apply umask,
+		// whereas WriteFile does apply umask.
+		if err := os.Chmod(fn, perm); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(fn, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, fn := range []string{"new.txt", "existing.txt", "subdir/dummy.txt"} {
+		createRegular(filepath.Join(source, fn), 0666)
+	}
+
+	if err := os.MkdirAll(dest, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create existing.txt in the destination directly as well,
+	// but with stricter permissions.
+	createRegular(filepath.Join(dest, "existing.txt"), 0600)
+
+	// Create subdir in the destination directly as well,
+	// but with stricter permissions.
+	destsub := filepath.Join(dest, "subdir")
+	if err := os.MkdirAll(destsub, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(destsub, 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(destsub, 0700) })
+
+	// start a server to sync from
+	srv := rsynctest.NewInMemory(t, rsyncd.Module{
+		Name: "interop",
+		Path: source,
+	})
+	args := []string{"-rlt"} // no -p (--perms)
+	srv.RunClient(t, args, "./", []string{dest})
+
+	{
+		want := []byte("hello")
+		got, err := os.ReadFile(filepath.Join(dest, "new.txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Fatalf("unexpected file contents: diff (-want +got):\n%s", diff)
+		}
+	}
+
+	if _, err := os.ReadFile(filepath.Join(dest, "subdir/dummy.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Existing files and directories are expected to keep their permissions.
+	destexisting := filepath.Join(dest, "existing.txt")
+	st, err := os.Lstat(destexisting)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := st.Mode().Perm(), os.FileMode(0600); got != want {
+		t.Errorf("%s: unexpected permissions: got %v, want %v", destexisting, got, want)
+	}
+
+	st, err = os.Lstat(destsub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := st.Mode().Perm(), os.FileMode(0500); got != want {
+		t.Errorf("%s: unexpected permissions: got %v, want %v", destsub, got, want)
+	}
+
+	// Newly transferred files are expected to get created with
+	// the sender’s mode (e.g. 0666), applying the process umask (e.g. 022),
+	// resulting in 0644 (-rw-r--r--).
+	destprobe := filepath.Join(dest, "new_permprobe.txt")
+	if err := os.WriteFile(destprobe, []byte(nil), 0666); err != nil {
+		t.Fatal(err)
+	}
+	st, err = os.Lstat(destprobe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := st.Mode().Perm()
+	destnew := filepath.Join(dest, "new.txt")
+	st, err = os.Lstat(destnew)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := st.Mode().Perm(); got != want {
+		t.Errorf("%s: unexpected permissions: got %v, want %v", destnew, got, want)
 	}
 }
 
@@ -338,7 +512,7 @@ func TestReceiverAlwaysChecksum(t *testing.T) {
 		Path: source,
 	})
 	args := []string{"-aH"}
-	srv.RunClient(t, args, []string{dest})
+	srv.RunClient(t, args, "./", []string{dest})
 
 	desthello := filepath.Join(dest, "hello.txt")
 	b, err := os.ReadFile(desthello)
@@ -362,7 +536,7 @@ func TestReceiverAlwaysChecksum(t *testing.T) {
 	}
 
 	args = append(args, "--checksum")
-	srv.RunClient(t, args, []string{dest})
+	srv.RunClient(t, args, "./", []string{dest})
 
 	b, err = os.ReadFile(desthello)
 	if err != nil {
@@ -406,7 +580,7 @@ func TestReceiverReadOnlyDir(t *testing.T) {
 		Path: source,
 	})
 	args := []string{"-aH"}
-	srv.RunClient(t, args, []string{dest})
+	srv.RunClient(t, args, "./", []string{dest})
 
 	desthello := filepath.Join(dest, "hello.txt")
 	b, err := os.ReadFile(desthello)
@@ -437,7 +611,7 @@ func TestReceiverReadOnlyDir(t *testing.T) {
 	}
 
 	args = append(args, "--checksum")
-	srv.RunClient(t, args, []string{dest})
+	srv.RunClient(t, args, "./", []string{dest})
 
 	b, err = os.ReadFile(desthello)
 	if err != nil {
@@ -465,6 +639,10 @@ func TestReceiverReadOnlyDir(t *testing.T) {
 }
 
 func TestReceiverSSH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("ssh transport test relies on a POSIX ssh client and /dev/null")
+	}
+
 	tmp := t.TempDir()
 	source := filepath.Join(tmp, "source")
 	dest := filepath.Join(tmp, "dest")
@@ -525,7 +703,7 @@ func TestReceiverCommand(t *testing.T) {
 	rsynctest.Run(t, "gokr-rsync",
 		"-aH",
 		"--dry-run",
-		"-e", os.Args[0],
+		"-e", `"`+os.Args[0]+`"`,
 		"localhost:"+source+"/",
 		dest)
 }

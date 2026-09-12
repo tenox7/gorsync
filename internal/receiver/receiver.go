@@ -33,6 +33,10 @@ func (rt *Transfer) RecvFiles(fileList []*File) error {
 			}
 			break
 		}
+		if idx < 0 || int(idx) >= len(fileList) {
+			return fmt.Errorf("protocol error: idx=%d out of bounds", idx)
+		}
+
 		if rt.Opts.DebugGTE(rsyncopts.DEBUG_RECV, 1) {
 			rt.Logger.Printf("receiving file idx=%d: %+v", idx, fileList[idx])
 		}
@@ -49,6 +53,17 @@ func (rt *Transfer) RecvFiles(fileList []*File) error {
 	return nil
 }
 
+// partialName reports where a previously kept partial file for name lives, or
+// "" when partials are not kept in a separate directory (in which case the
+// partial was renamed to the destination name and openLocalFile finds it).
+// The layout must match pendingFile.Cleanup in output.go.
+func (rt *Transfer) partialName(name string) string {
+	if rt.Opts.Inplace || !rt.Opts.KeepPartial || rt.Opts.PartialDir == "" {
+		return ""
+	}
+	return filepath.Join(rt.Opts.PartialDir, filepath.Base(name))
+}
+
 func (rt *Transfer) recvFile1(f *File) error {
 	if rt.Opts.DryRun {
 		if !rt.Opts.Server {
@@ -57,12 +72,41 @@ func (rt *Transfer) recvFile1(f *File) error {
 		return nil
 	}
 
+	st, err := rt.DestRoot.Lstat(f.Name)
+	if err != nil || !st.Mode().IsRegular() {
+		st = nil
+	}
+	perm := rt.destPerm(f, st)
+
+	if partialName := rt.partialName(f.Name); partialName != "" {
+		// Resume from the kept partial file, if any, regardless of
+		// whether the localFile exists.
+		partial, err := rt.DestRoot.Open(partialName)
+		if err != nil && !os.IsNotExist(err) {
+			rt.Logger.Printf("opening partial file failed, continuing: %v", err)
+			// fallthrough to local file
+		}
+		if err == nil {
+			// partial file exists; use it.
+			defer partial.Close()
+			if err := rt.receiveData(f, partial, perm); err != nil {
+				return err
+			}
+			// receiveData called partial.Close()
+			if err := rt.DestRoot.Remove(partialName); err != nil {
+				return err
+			}
+			return nil
+		}
+		// fallthrough to local file
+	}
+
 	localFile, err := rt.openLocalFile(f)
 	if err != nil && !os.IsNotExist(err) {
 		rt.Logger.Printf("opening local file failed, continuing: %v", err)
 	}
 	defer localFile.Close()
-	if err := rt.receiveData(f, localFile); err != nil {
+	if err := rt.receiveData(f, localFile, perm); err != nil {
 		return err
 	}
 	return nil
@@ -87,17 +131,11 @@ func (rt *Transfer) openLocalFile(f *File) (*os.File, error) {
 		return nil, nil
 	}
 
-	if !rt.Opts.PreservePerms {
-		// If the file exists already and we are not preserving permissions,
-		// then act as though the remote sent us the existing permissions:
-		f.Mode = int32(st.Mode().Perm())
-	}
-
 	return in, nil
 }
 
 // rsync/receiver.c:receive_data
-func (rt *Transfer) receiveData(f *File, localFile *os.File) error {
+func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) error {
 	rt.Progress.Reset(uint64(f.Length))
 	var sh rsync.SumHead
 	if err := sh.ReadFrom(rt.Conn); err != nil {
@@ -112,6 +150,7 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File) error {
 		Inplace:     rt.Opts.Inplace,
 		KeepPartial: rt.Opts.KeepPartial,
 		PartialDir:  rt.Opts.PartialDir,
+		Fsync:       rt.Opts.DoFsync,
 	})
 	if err != nil {
 		return err
@@ -193,11 +232,18 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File) error {
 		rt.Logger.Printf("checksum %x matches!", localSum)
 	}
 
+	if localFile != nil {
+		// Close the file earlier than the calling function’s deferred Close(),
+		// so that we can rename files on Windows, which fails as long
+		// as there are any open file handles.
+		localFile.Close()
+	}
+
 	if err := out.CloseAtomicallyReplace(); err != nil {
 		return err
 	}
 
-	if err := rt.setPerms(f, fs.FileMode(f.Mode)); err != nil {
+	if err := rt.setPerms(f, perm); err != nil {
 		return err
 	}
 

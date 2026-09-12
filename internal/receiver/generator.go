@@ -51,22 +51,12 @@ func (rt *Transfer) GenerateFiles(fileList []*File) error {
 	return nil
 }
 
-func (rt *Transfer) touchUpDirs(fileList []*File) error {
-	for idx, f := range fileList {
+func (rt *Transfer) touchUpDirs() error {
+	for _, d := range rt.retouchDirs {
 		if rt.Opts.DebugGTE(rsyncopts.DEBUG_TIME, 2) {
-			rt.Logger.Printf("touchUpDirs: %s (%d)", f.Name, idx)
+			rt.Logger.Printf("touchUpDirs: %s (%v)", d.f.Name, d.perm)
 		}
-		mode := fs.FileMode(f.Mode)
-		if mode&rsync.S_IFMT != rsync.S_IFDIR {
-			continue // not a directory
-		}
-		if rt.Opts.DryRun {
-			continue
-		}
-		if mode&syscall.S_IWUSR > 0 {
-			continue // directory is writeable, no touchup needed
-		}
-		if err := rt.setPerms(f, mode); err != nil {
+		if err := rt.setPerms(d.f, d.perm); err != nil {
 			return err
 		}
 	}
@@ -103,7 +93,7 @@ func modTimeEqual(a, b time.Time) bool {
 }
 
 // rsync/rsync.c:set_perms
-func (rt *Transfer) setPerms(f *File, mode fs.FileMode) error {
+func (rt *Transfer) setPerms(f *File, perm fs.FileMode) error {
 	if rt.Opts.DryRun {
 		return nil
 	}
@@ -113,10 +103,9 @@ func (rt *Transfer) setPerms(f *File, mode fs.FileMode) error {
 		return err
 	}
 
-	perm := mode & os.ModePerm
-	mode = mode & rsync.S_IFMT
+	isLink := f.Mode&rsync.S_IFMT == rsync.S_IFLNK
 	if rt.Opts.PreserveTimes &&
-		mode != rsync.S_IFLNK &&
+		!isLink &&
 		!modTimeEqual(st.ModTime(), f.ModTime) {
 		if err := rt.DestRoot.Chtimes(f.Name, f.ModTime, f.ModTime); err != nil {
 			return err
@@ -128,7 +117,7 @@ func (rt *Transfer) setPerms(f *File, mode fs.FileMode) error {
 		return err
 	}
 
-	if mode != rsync.S_IFLNK {
+	if !isLink {
 		if st.Mode().Perm() != perm { // only call Chmod if the permissions actually differ
 			if err := rt.DestRoot.Chmod(f.Name, perm); err != nil {
 				return err
@@ -169,8 +158,12 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 			}
 			err = fmt.Errorf("file removed")
 		}
+		var destSt os.FileInfo
+		if err == nil {
+			destSt = st
+		}
+		perm := rt.destPerm(f, destSt)
 		if err != nil {
-			perm := fs.FileMode(f.Mode) & os.ModePerm
 			if rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
 				rt.Logger.Printf("MkdirAll(%s, %v)", f.Name, perm)
 			}
@@ -180,20 +173,28 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 			}
 			// fallthrough to setPerms and return nil
 		}
-		mode := fs.FileMode(f.Mode)
-		if mode&syscall.S_IWUSR == 0 {
+		if perm&syscall.S_IWUSR == 0 {
 			// The directory is lacking write permission,
 			// so we need to create it writeable as long as
 			// we are creating files inside that directory.
 			// GenerateFiles will fix permissions afterwards.
-			rt.retouchDirPerms = true
-			mode |= syscall.S_IWUSR
+			rt.retouchDirs = append(rt.retouchDirs, retouchDir{
+				f:    f,
+				perm: perm,
+			})
+			perm |= syscall.S_IWUSR
 		}
-		if err := rt.setPerms(f, mode); err != nil {
+		if err := rt.setPerms(f, perm); err != nil {
 			return err
 		}
 		return nil
 	}
+
+	var destSt os.FileInfo
+	if err == nil && !st.IsDir() {
+		destSt = st
+	}
+	perm := rt.destPerm(f, destSt)
 
 	if rt.Opts.PreserveLinks && mode == rsync.S_IFLNK {
 		// TODO: safe_symlinks option
@@ -204,7 +205,7 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 					rt.Logger.Printf("existing target: %q", target)
 				}
 				if target == f.LinkTarget {
-					if err := rt.setPerms(f, fs.FileMode(f.Mode)); err != nil {
+					if err := rt.setPerms(f, perm); err != nil {
 						return err
 					}
 					return nil // skip
@@ -219,7 +220,7 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		if err := symlink(rt.DestRoot, f.LinkTarget, f.Name); err != nil {
 			return err
 		}
-		if err := rt.setPerms(f, fs.FileMode(f.Mode)); err != nil {
+		if err := rt.setPerms(f, perm); err != nil {
 			return err
 		}
 		return nil
@@ -229,7 +230,7 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		mode == rsync.S_IFBLK ||
 		mode == rsync.S_IFSOCK ||
 		mode == rsync.S_IFIFO) {
-		if err := rt.createDevice(f, st); err != nil {
+		if err := rt.createDevice(f, st, perm); err != nil {
 			return err
 		}
 		return nil
@@ -262,6 +263,17 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		return nil
 	}
 
+	if rt.Opts.KeepPartial {
+		sent, err := rt.recvGeneratorPartial(idx, f)
+		if err != nil {
+			return err
+		}
+		if sent {
+			return nil
+		}
+		// no partial file? fall through.
+	}
+
 	if os.IsNotExist(err) {
 		return requestFullFile()
 	}
@@ -288,7 +300,7 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		if rt.Opts.InfoGTE(rsyncopts.INFO_SKIP, 1) {
 			rt.Logger.Printf("skipping %s", local)
 		}
-		if err := rt.setPerms(f, fs.FileMode(f.Mode)); err != nil {
+		if err := rt.setPerms(f, perm); err != nil {
 			return err
 		}
 		return nil
@@ -335,6 +347,50 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 	}
 
 	return rt.generateAndSendSums(in, st.Size())
+}
+
+func (rt *Transfer) recvGeneratorPartial(idx int, f *File) (bool, error) {
+	// See if there is a partial file we can resume from.
+	partialName := rt.partialName(f.Name)
+	if partialName == "" {
+		// Partials are kept at the destination name, where the regular delta
+		// path already resumes from them.
+		return false, nil
+	}
+	partial, err := rt.DestRoot.Open(partialName)
+	if os.IsNotExist(err) {
+		// No partial file, request the full file.
+		return false, nil
+	}
+	if err != nil {
+		rt.Logger.Printf("failed to open partial file %s, continuing: %v", partialName, err)
+		return false, nil
+	}
+	defer partial.Close()
+	st, err := partial.Stat()
+	if err != nil {
+		rt.Logger.Printf("failed to stat partial file %s, continuing: %v", partialName, err)
+		return false, nil
+	}
+
+	if rt.Opts.DryRun {
+		if err := rt.Conn.WriteInt32(int32(idx)); err != nil {
+			return true, err
+		}
+
+		return true, nil
+	}
+
+	// TODO: if deltas are disabled, request the file in full
+
+	if rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
+		rt.Logger.Printf("sending sums for: %s", f.Name)
+	}
+	if err := rt.Conn.WriteInt32(int32(idx)); err != nil {
+		return true, err
+	}
+
+	return true, rt.generateAndSendSums(partial, st.Size())
 }
 
 // rsync/generator.c:generate_and_send_sums

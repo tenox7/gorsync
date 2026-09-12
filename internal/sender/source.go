@@ -5,6 +5,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 )
 
 // FileSource is the interface which the gokrazy rsync sender uses
@@ -40,6 +41,31 @@ func (s *osRootSource) FS() fs.FS                            { return s.root.FS(
 func (s *osRootSource) Open(name string) (File, error)       { return s.root.Open(name) }
 func (s *osRootSource) Readlink(name string) (string, error) { return s.root.Readlink(name) }
 func (s *osRootSource) Close() error                         { return s.root.Close() }
+
+// singleFileSource implements FileSource.
+type singleFileSource struct {
+	path string
+	info fs.FileInfo
+}
+
+func newSingleFileSource(path string, info fs.FileInfo) *singleFileSource {
+	return &singleFileSource{
+		path: path,
+		info: info,
+	}
+}
+
+func (s *singleFileSource) FS() fs.FS                         { return &singleFileFS{s} }
+func (s *singleFileSource) Open(_ string) (File, error)       { return os.Open(s.path) }
+func (s *singleFileSource) Readlink(_ string) (string, error) { return os.Readlink(s.path) }
+func (s *singleFileSource) Close() error                      { return nil }
+
+type singleFileFS struct {
+	sfs *singleFileSource
+}
+
+func (f *singleFileFS) Open(name string) (fs.File, error)     { return os.Open(f.sfs.path) }
+func (f *singleFileFS) Stat(name string) (fs.FileInfo, error) { return f.sfs.info, nil }
 
 // fsSource wraps an fs.FS to implement FileSource.
 type fsSource struct {
@@ -80,3 +106,35 @@ func (s *fsSource) Readlink(name string) (string, error) {
 }
 
 func (s *fsSource) Close() error { return nil }
+
+// subSource wraps a FileSource and serves the specified subtree,
+// like fs.Sub() does for fs.FS.
+type subSource struct {
+	underlying FileSource
+	subdir     string
+	fsys       fs.FS
+}
+
+func newSubSource(underlying FileSource, subdir string) (FileSource, error) {
+	fsys, err := fs.Sub(underlying.FS(), subdir)
+	if err != nil {
+		return nil, err
+	}
+	return &subSource{
+		underlying: underlying,
+		subdir:     subdir,
+		fsys:       fsys,
+	}, nil
+}
+
+func (s *subSource) FS() fs.FS { return s.fsys }
+
+func (s *subSource) Open(name string) (File, error) {
+	return s.underlying.Open(path.Join(s.subdir, name))
+}
+
+func (s *subSource) Readlink(name string) (string, error) {
+	return s.underlying.Readlink(path.Join(s.subdir, name))
+}
+
+func (s *subSource) Close() error { return nil }

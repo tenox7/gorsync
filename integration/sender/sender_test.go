@@ -7,15 +7,14 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strconv"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/gokrazy/rsync/internal/rsynctest"
 	"github.com/gokrazy/rsync/internal/testlogger"
 	"github.com/google/go-cmp/cmp"
-	"github.com/google/renameio/v2"
 )
 
 func TestMain(m *testing.M) {
@@ -129,11 +128,11 @@ func TestSender(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		stt := st.Sys().(*syscall.Stat_t)
-		if got, want := int(stt.Uid), uid; got != want {
+		gotUID, gotGID := rsynctest.StatUidGid(t, st)
+		if got, want := gotUID, uid; got != want {
 			t.Errorf("unexpected uid: got %d, want %d", got, want)
 		}
-		if got, want := int(stt.Gid), gid; got != want {
+		if got, want := gotGID, gid; got != want {
 			t.Errorf("unexpected gid: got %d, want %d", got, want)
 		}
 	}
@@ -158,9 +157,7 @@ func TestSender(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Replace the dest symlink to see if it will be restored
-	if err := renameio.Symlink("wrong", filepath.Join(dest, "hey")); err != nil {
-		t.Fatal(err)
-	}
+	rsynctest.ReplaceSymlink(t, "wrong", filepath.Join(dest, "hey"))
 
 	rsynctest.Run(t, args...)
 
@@ -307,11 +304,11 @@ func TestSenderNoSlash(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		stt := st.Sys().(*syscall.Stat_t)
-		if got, want := int(stt.Uid), uid; got != want {
+		gotUID, gotGID := rsynctest.StatUidGid(t, st)
+		if got, want := gotUID, uid; got != want {
 			t.Errorf("unexpected uid: got %d, want %d", got, want)
 		}
-		if got, want := int(stt.Gid), gid; got != want {
+		if got, want := gotGID, gid; got != want {
 			t.Errorf("unexpected gid: got %d, want %d", got, want)
 		}
 	}
@@ -336,9 +333,7 @@ func TestSenderNoSlash(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Replace the dest symlink to see if it will be restored
-	if err := renameio.Symlink("wrong", filepath.Join(dest, "hey")); err != nil {
-		t.Fatal(err)
-	}
+	rsynctest.ReplaceSymlink(t, "wrong", filepath.Join(dest, "hey"))
 
 	rsynctest.Run(t, args...)
 
@@ -401,6 +396,111 @@ func TestSenderRelative(t *testing.T) {
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Fatalf("unexpected file contents: diff (-want +got):\n%s", diff)
 		}
+	}
+}
+
+// TestSenderNamedSourceParentUnreadable is a regression test for
+// https://github.com/gokrazy/rsync/issues/66: syncing a named directory (no
+// trailing slash) must not require access to the source’s parent directory.
+//
+// The sender allowlists the source itself for Landlock, but not its parent, so
+// opening the parent (as the pre-fix code did to obtain the source basename)
+// is denied. We reproduce that portably — without Landlock — by removing read
+// access from the parent while keeping search (execute) access, which likewise
+// makes os.OpenRoot(parent) fail but os.OpenRoot(source) succeed.
+func TestSenderNamedSourceParentUnreadable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX directory permissions do not gate reads on Windows")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses directory permission checks, so the parent would still be readable")
+	}
+	t.Parallel()
+
+	tmp := t.TempDir()
+	parent := filepath.Join(tmp, "parent")
+	source := filepath.Join(parent, "source")
+	dest := filepath.Join(tmp, "dest")
+
+	if err := os.MkdirAll(source, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "hello"), []byte("world"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Remove read (but keep search) on the parent, then restore it before the
+	// t.TempDir() cleanup so RemoveAll can recurse back in.
+	if err := os.Chmod(parent, 0o111); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(parent, 0o755) })
+
+	srv := rsynctest.New(t, rsynctest.WritableInteropModule(dest))
+
+	// Named directory: no trailing slash, so the source directory itself is
+	// copied and the receiver creates dest/source/hello.
+	//
+	// --gokr.dont_restrict: the unreadable parent (not Landlock) provides
+	// the constraint under test; skipping the Landlock ruleset stays within
+	// the kernel's limit of 16 stacked rulesets per process (all tests in
+	// this package share one process).
+	rsynctest.Run(t, "gokr-rsync", "-aH", "--gokr.dont_restrict", source, "rsync://localhost:"+srv.Port+"/interop/")
+
+	want := []byte("world")
+	got, err := os.ReadFile(filepath.Join(dest, "source", "hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("unexpected file contents: diff (-want +got):\n%s", diff)
+	}
+}
+
+// TestSenderNamedFileParentUnreadable is the single-file variant of
+// TestSenderNamedSourceParentUnreadable: syncing a named file must not
+// require access to the file's parent directory either (issue #66; the
+// client allowlists the file itself as a read-only Landlock rule).
+func TestSenderNamedFileParentUnreadable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX directory permissions do not gate reads on Windows")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses directory permission checks, so the parent would still be readable")
+	}
+	t.Parallel()
+
+	tmp := t.TempDir()
+	parent := filepath.Join(tmp, "parent")
+	hello := filepath.Join(parent, "hello")
+	dest := filepath.Join(tmp, "dest")
+
+	if err := os.MkdirAll(parent, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hello, []byte("world"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Remove read (but keep search) on the parent, then restore it before the
+	// t.TempDir() cleanup so RemoveAll can recurse back in.
+	if err := os.Chmod(parent, 0o111); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(parent, 0o755) })
+
+	srv := rsynctest.New(t, rsynctest.WritableInteropModule(dest))
+
+	// --gokr.dont_restrict: see TestSenderNamedSourceParentUnreadable.
+	rsynctest.Run(t, "gokr-rsync", "-aH", "--gokr.dont_restrict", hello, "rsync://localhost:"+srv.Port+"/interop/")
+
+	want := []byte("world")
+	got, err := os.ReadFile(filepath.Join(dest, "hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("unexpected file contents: diff (-want +got):\n%s", diff)
 	}
 }
 
@@ -518,11 +618,11 @@ func TestSenderBothLocal(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		stt := st.Sys().(*syscall.Stat_t)
-		if got, want := int(stt.Uid), uid; got != want {
+		gotUID, gotGID := rsynctest.StatUidGid(t, st)
+		if got, want := gotUID, uid; got != want {
 			t.Errorf("unexpected uid: got %d, want %d", got, want)
 		}
-		if got, want := int(stt.Gid), gid; got != want {
+		if got, want := gotGID, gid; got != want {
 			t.Errorf("unexpected gid: got %d, want %d", got, want)
 		}
 	}
@@ -547,9 +647,7 @@ func TestSenderBothLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Replace the dest symlink to see if it will be restored
-	if err := renameio.Symlink("wrong", filepath.Join(dest, "hey")); err != nil {
-		t.Fatal(err)
-	}
+	rsynctest.ReplaceSymlink(t, "wrong", filepath.Join(dest, "hey"))
 
 	rsynctest.Run(t, args...)
 
@@ -653,8 +751,59 @@ func TestSenderBothLocalHang(t *testing.T) {
 	}
 }
 
+// like TestSenderBothLocalFile, but with an invocation that used to fail
+// with error message "file has changed mid-transfer" (issue #53).
+func TestSenderPartial257K(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	source := filepath.Join(tmp, "source")
+	dest := filepath.Join(tmp, "dest")
+	want := make([]byte, 1024*257+1)
+
+	if err := os.MkdirAll(source, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	hello := filepath.Join(source, "hello.txt")
+
+	if err := os.WriteFile(hello, want, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	destFile := filepath.Join(dest, "source", "hello.txt")
+	if err := os.MkdirAll(filepath.Dir(destFile), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(destFile, []byte{0}, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	args := []string{
+		"gokr-rsync",
+		"-rv",
+		source,
+		dest,
+	}
+	rsynctest.Run(t, args...)
+
+	{
+		got, err := os.ReadFile(destFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Fatalf("unexpected file contents: diff (-want +got):\n%s", diff)
+		}
+	}
+}
+
 func TestReceiverCommandDryRun(t *testing.T) {
 	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("stdin not supported on Windows")
+	}
 
 	tmp := t.TempDir()
 	source := filepath.Join(tmp, "source")
@@ -682,10 +831,11 @@ func TestReceiverCommandDryRun(t *testing.T) {
 	var buf bytes.Buffer
 	rsync := exec.Command(rsynctest.AnyRsync(t),
 		"--dry-run",
-		"-e", exe,
+		"-e", `"`+exe+`"`,
 		"-a",
-		source+"/",
+		filepath.Base(source)+"/",
 		"localhost:"+dest+"/")
+	rsync.Dir = filepath.Dir(source)
 	rsync.Stdout = &buf
 	rsync.Stderr = testlogger.New(t)
 	t.Logf("%v", rsync.Args)

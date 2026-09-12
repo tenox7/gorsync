@@ -59,7 +59,7 @@ func WithLogger(logger log.Logger) Option {
 	})
 }
 
-func WithStderr(stderr io.Writer) Option {
+func WithStderr(stderr io.WriteCloser) Option {
 	return serverOptionFunc(func(s *Server) {
 		s.stderr = stderr
 	})
@@ -111,7 +111,7 @@ func NewServer(modules []Module, opts ...Option) (*Server, error) {
 }
 
 type Server struct {
-	stderr       io.Writer
+	stderr       io.WriteCloser
 	logger       log.Logger
 	dontRestrict bool
 
@@ -266,7 +266,7 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 
 		// terminate connection with an error about which flag is not supported
 		c := &rsyncwire.Conn{
-			Reader: rd,
+			Reader: io.NopCloser(rd),
 			Writer: cwr,
 		}
 
@@ -315,13 +315,14 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 }
 
 type Conn struct {
-	name string
-	crd  *rsyncwire.CountingReader
-	cwr  *rsyncwire.CountingWriter
-	rd   *bufio.Reader
+	name   string
+	crd    *rsyncwire.CountingReader
+	cwr    *rsyncwire.CountingWriter
+	rd     *bufio.Reader
+	closer io.Closer
 }
 
-func NewConnection(r io.Reader, w io.Writer, name string) *Conn {
+func NewConnection(r io.ReadCloser, w io.WriteCloser, name string) *Conn {
 	crd, cwr := rsyncwire.CounterPair(r, w)
 	rd := bufio.NewReader(crd)
 	return &Conn{
@@ -329,6 +330,10 @@ func NewConnection(r io.Reader, w io.Writer, name string) *Conn {
 		crd:  crd,
 		cwr:  cwr,
 		rd:   rd,
+		closer: &rsync.BothCloser{
+			ReadCloser:  r,
+			WriteCloser: w,
+		},
 	}
 }
 
@@ -362,7 +367,13 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 	sessionChecksumSeed := int32(time.Now().Unix()) ^ (int32(os.Getpid()) << 6)
 
 	c := &rsyncwire.Conn{
-		Reader: rd,
+		Reader: struct {
+			io.Reader
+			io.Closer
+		}{
+			Reader: rd,
+			Closer: conn.closer,
+		},
 		Writer: cwr,
 	}
 
@@ -464,6 +475,8 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 
 			AppendMode: opts.AppendMode(),
 
+			DoFsync: opts.DoFsync(),
+
 			InfoGTE:  opts.InfoGTE,
 			DebugGTE: opts.DebugGTE,
 		},
@@ -491,7 +504,10 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 		// Descend into subdirectory (if requested),
 		// using the os.OpenRoot traversal-safe API.
 		if len(paths) == 1 && paths[0] != "/" {
-			subdir := strings.TrimPrefix(paths[0], "/")
+			// Trim leading and trailing slash:
+			// (*os.Root).MkdirAll("foo/") was a security issue:
+			// https://go.dev/issue/79005, so no longer works.
+			subdir := strings.Trim(paths[0], "/")
 			subRoot, err := rt.DestRoot.OpenRoot(subdir)
 			if err != nil {
 				if os.IsNotExist(err) {
@@ -559,7 +575,7 @@ func (s *Server) handleConnSender(module *Module, crd *rsyncwire.CountingReader,
 	if module == nil {
 		module = &Module{
 			Name: "implicit",
-			Path: "/",
+			Path: rsync.FileSystemRoot,
 		}
 	}
 
@@ -618,6 +634,28 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 			c := NewConnection(conn, conn, remoteAddr.String())
 			if err := s.HandleDaemonConn(ctx, c); err != nil {
 				s.logger.Printf("[%s] handle: %v", remoteAddr, err)
+				// Perform a “lingering close” [1] to work around
+				// “the TCP reset problem” (per RFC 9112 Section 9.6):
+				// When the server closes the TCP socket while there
+				// is still data in the recv buffer (usually the case
+				// with rsync, which is heavily pipelined),
+				// the kernel sends RST (not FIN), which the client
+				// might implement by dropping queued data,
+				// as mandated by the TCP RFC 9293 Section 3.10.7.4.
+				//
+				// As of 2026, Linux does not follow the RFC, Windows does.
+				//
+				// A lingering close shuts down the socket (sends FIN)
+				// and waits until the client has received it,
+				// which the client confirms by closing.
+				//
+				// [1]: https://apenwarr.ca/log/20090814-solinger-is-not-the-same-as-apaches-lingering-close
+				const lingerTimeout = 5 * time.Second
+				if cw, ok := conn.(interface{ CloseWrite() error }); ok {
+					cw.CloseWrite()
+				}
+				conn.SetReadDeadline(time.Now().Add(lingerTimeout))
+				io.Copy(io.Discard, conn)
 			}
 		}()
 	}

@@ -36,7 +36,8 @@ func TestErrors(t *testing.T) {
 		"--port="+srv.Port,
 		"rsync://localhost/interop/", // copy contents of interop
 		//source+"/", // sync from local directory
-		dest) // directly into dest
+		filepath.Base(dest)) // directly into dest (relative to rsync.Dir)
+	rsync.Dir = filepath.Dir(dest)
 	rsync.Stdout = &buf
 	rsync.Stderr = &buf
 	if err := rsync.Run(); err == nil {
@@ -45,7 +46,7 @@ func TestErrors(t *testing.T) {
 
 	output := buf.String()
 	t.Logf("output:\n%s\n(end of output)", output)
-	if want := "(code 23)"; !strings.Contains(output, want) {
+	if want := "module path is not accessible"; !strings.Contains(output, want) {
 		t.Fatalf("rsync output unexpectedly did not contain %q:\n%s", want, output)
 	}
 }
@@ -69,7 +70,8 @@ func TestNoSuchModule(t *testing.T) {
 		"--port="+srv.Port,
 		"rsync://localhost/requesting-nonsense/", // copy contents of interop
 		//source+"/", // sync from local directory
-		dest) // directly into dest
+		filepath.Base(dest)) // directly into dest (relative to rsync.Dir)
+	rsync.Dir = filepath.Dir(dest)
 	rsync.Stdout = &buf
 	rsync.Stderr = &buf
 	if err := rsync.Run(); err == nil {
@@ -119,7 +121,8 @@ func TestNoReadPermission(t *testing.T) {
 		"-v", "-v", "-v", "-v",
 		"--port="+srv.Port,
 		"rsync://localhost/interop/", // copy contents of interop
-		dest)                         // directly into dest
+		filepath.Base(dest))          // directly into dest (relative to rsync.Dir)
+	rsync.Dir = filepath.Dir(dest)
 	rsync.Stdout = &buf
 	rsync.Stderr = &buf
 	if err := rsync.Run(); err != nil {

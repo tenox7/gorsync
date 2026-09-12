@@ -61,16 +61,19 @@ func socketClient(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Optio
 		dialer.Timeout = time.Duration(timeout) * time.Second
 		timeoutStr = fmt.Sprintf(" (timeout: %d seconds)", timeout)
 	}
-	osenv.Logf("Opening TCP connection to %s%s", host, timeoutStr)
-	dial := dialer.DialContext
+	dialFn := dialer.DialContext
 	if osenv.DialContext != nil {
-		dial = osenv.DialContext
+		dialFn = osenv.DialContext
+		osenv.Logf("Opening TCP connection to %s%s (via custom DialContext)", host, timeoutStr)
+	} else {
+		osenv.Logf("Opening TCP connection to %s%s", host, timeoutStr)
 	}
-	conn, err := dial(ctx, "tcp", host)
+	conn, err := dialFn(ctx, "tcp", host)
 	if err != nil {
 		return nil, err
 	}
 	defer conn.Close()
+
 	if osenv.Restrict() {
 		if err := restrict.MaybeFileSystem(roDirs, rwDirs); err != nil {
 			return nil, err
@@ -92,7 +95,7 @@ func socketClient(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Optio
 
 // StartInbandExchange is the public API for daemon-over-remote-shell
 // and the rsyncclient package. Auth credentials come from env/file only.
-func StartInbandExchange(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriter, remotePath string) (done bool, _ error) {
+func StartInbandExchange(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriteCloser, remotePath string) (done bool, _ error) {
 	conn, stop := rsyncwire.WrapCtx(ctx, conn)
 	defer stop()
 	return startInbandExchange(osenv, opts, conn, remotePath, "", "")

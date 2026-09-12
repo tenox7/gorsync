@@ -14,10 +14,10 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
+	"github.com/gokrazy/rsync"
 	"github.com/gokrazy/rsync/internal/anonssh"
 	"github.com/gokrazy/rsync/internal/maincmd"
 	"github.com/gokrazy/rsync/internal/rsyncdconfig"
@@ -30,7 +30,6 @@ import (
 	"github.com/gokrazy/rsync/rsynccmd"
 	"github.com/gokrazy/rsync/rsyncd"
 	"github.com/google/go-cmp/cmp"
-	"golang.org/x/sys/unix"
 )
 
 // GosPublicRelease is the time when Go was publicly released:
@@ -47,10 +46,9 @@ var GosPublicRelease = func() time.Time {
 
 type TestServer struct {
 	// config
-	module       rsyncd.Module
-	listener     net.Listener
-	listeners    []rsyncdconfig.Listener
-	dontRestrict bool
+	module    rsyncd.Module
+	listener  net.Listener
+	listeners []rsyncdconfig.Listener
 
 	// state
 	srv *rsyncd.Server
@@ -90,12 +88,6 @@ func Listeners(lns []rsyncdconfig.Listener) Option {
 func Listener(ln net.Listener) Option {
 	return func(ts *TestServer) {
 		ts.listener = ln
-	}
-}
-
-func DontRestrict() Option {
-	return func(ts *TestServer) {
-		ts.dontRestrict = true
 	}
 }
 
@@ -142,11 +134,12 @@ func New(t *testing.T, modules []rsyncd.Module, opts ...Option) *TestServer {
 			Modules: modules,
 		}
 		go func() {
-			err := anonssh.Serve(ctx, osenv, ts.listener, sshListener, cfg, func(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
+			err := anonssh.Serve(ctx, osenv, ts.listener, sshListener, cfg, func(args []string, stdin io.ReadCloser, stdout io.WriteCloser, stderr io.WriteCloser) error {
 				osenv := &rsyncos.Env{
-					Stdin:  stdin,
-					Stdout: stdout,
-					Stderr: stderr,
+					Stdin:        stdin,
+					Stdout:       stdout,
+					Stderr:       stderr,
+					DontRestrict: true,
 				}
 				_, err := maincmd.Main(context.Background(), osenv, args, cfg)
 				return err
@@ -169,11 +162,12 @@ func New(t *testing.T, modules []rsyncd.Module, opts ...Option) *TestServer {
 			Modules: modules,
 		}
 		go func() {
-			err := anonssh.Serve(ctx, osenv, ts.listener, sshListener, cfg, func(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
+			err := anonssh.Serve(ctx, osenv, ts.listener, sshListener, cfg, func(args []string, stdin io.ReadCloser, stdout io.WriteCloser, stderr io.WriteCloser) error {
 				osenv := &rsyncos.Env{
-					Stdin:  stdin,
-					Stdout: stdout,
-					Stderr: stderr,
+					Stdin:        stdin,
+					Stdout:       stdout,
+					Stderr:       stderr,
+					DontRestrict: true,
 				}
 				_, err := maincmd.Main(context.Background(), osenv, args, cfg)
 				return err
@@ -198,6 +192,7 @@ func Run(tb testing.TB, args ...string) *rsyncstats.TransferStats {
 	cmd := rsynccmd.Command(args[0], args[1:]...)
 	cmd.Stdout = testlogger.New(tb)
 	cmd.Stderr = testlogger.New(tb)
+	cmd.DontRestrict = true
 	result, err := cmd.Run(tb.Context())
 	if err != nil {
 		tb.Fatal(err)
@@ -205,12 +200,27 @@ func Run(tb testing.TB, args ...string) *rsyncstats.TransferStats {
 	return result.Stats
 }
 
+type nopCloser struct{}
+
+func (*nopCloser) Close() error { return nil }
+
+func nopClose(w io.Writer) io.WriteCloser {
+	return struct {
+		io.Writer
+		io.Closer
+	}{
+		Writer: w,
+		Closer: &nopCloser{},
+	}
+}
+
 func Output(tb testing.TB, args ...string) (stdout []byte, stderr []byte) {
 	tb.Helper()
 	var stdoutb, stderrb bytes.Buffer
 	cmd := rsynccmd.Command(args[0], args[1:]...)
-	cmd.Stdout = &stdoutb
-	cmd.Stderr = &stderrb
+	cmd.Stdout = nopClose(&stdoutb)
+	cmd.Stderr = nopClose(&stderrb)
+	cmd.DontRestrict = true
 	_, err := cmd.Run(context.Background())
 	if err != nil {
 		tb.Fatal(err)
@@ -221,8 +231,9 @@ func Output(tb testing.TB, args ...string) (stdout []byte, stderr []byte) {
 func CombinedOutput(args ...string) ([]byte, error) {
 	var buf bytes.Buffer
 	cmd := rsynccmd.Command(args[0], args[1:]...)
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+	cmd.Stdout = nopClose(&buf)
+	cmd.Stderr = nopClose(&buf)
+	cmd.DontRestrict = true
 	_, err := cmd.Run(context.Background())
 	return buf.Bytes(), err
 }
@@ -238,9 +249,7 @@ func NewInMemory(t *testing.T, module rsyncd.Module, opts ...Option) *TestServer
 	stderr := testlogger.New(t)
 	rsyncdOpts := []rsyncd.Option{
 		rsyncd.WithStderr(stderr),
-	}
-	if ts.dontRestrict {
-		rsyncdOpts = append(rsyncdOpts, rsyncd.DontRestrict())
+		rsyncd.DontRestrict(),
 	}
 	srv, err := rsyncd.NewServer([]rsyncd.Module{module}, rsyncdOpts...)
 	if err != nil {
@@ -250,12 +259,7 @@ func NewInMemory(t *testing.T, module rsyncd.Module, opts ...Option) *TestServer
 	return ts
 }
 
-type readWriter struct {
-	io.Reader
-	io.Writer
-}
-
-func (ts *TestServer) pipe(t *testing.T, args []string) (*sync.WaitGroup, io.ReadWriter) {
+func (ts *TestServer) pipe(t *testing.T, args []string) (*sync.WaitGroup, io.ReadWriteCloser) {
 	// stdin from the view of the rsync server
 	stdinrd, stdinwr := io.Pipe()
 	stdoutrd, stdoutwr := io.Pipe()
@@ -276,20 +280,20 @@ func (ts *TestServer) pipe(t *testing.T, args []string) (*sync.WaitGroup, io.Rea
 		}
 	}()
 
-	rw := &readWriter{
-		Reader: stdoutrd,
-		Writer: stdinwr,
+	rw := &rsync.BothCloser{
+		ReadCloser:  stdoutrd,
+		WriteCloser: stdinwr,
 	}
 	return &wg, rw
 }
 
-func (ts *TestServer) RunClient(t *testing.T, args []string, remaining []string) *rsyncstats.TransferStats {
+func (ts *TestServer) RunClient(t *testing.T, args []string, src string, remaining []string) *rsyncstats.TransferStats {
 	stderr := testlogger.New(t)
 	cl, err := rsyncclient.New(args, rsyncclient.WithStderr(stderr), rsyncclient.DontRestrict())
 	if err != nil {
 		t.Fatal(err)
 	}
-	wg, rw := ts.pipe(t, cl.ServerCommandOptions("./"))
+	wg, rw := ts.pipe(t, cl.ServerCommandOptions(src))
 	res, err := cl.Run(t.Context(), rw, remaining)
 	if err != nil {
 		t.Fatal(err)
@@ -321,109 +325,6 @@ func CommandMain(m *testing.M) error {
 		os.Exit(m.Run())
 	}
 	return nil
-}
-
-func CreateDummyDeviceFiles(t *testing.T, dir string) {
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	char := filepath.Join(dir, "char")
-	// major 1, minor 5, like /dev/zero
-	if err := unix.Mknod(char, 0600|syscall.S_IFCHR, int(unix.Mkdev(1, 5))); err != nil {
-		t.Fatal(err)
-	}
-
-	block := filepath.Join(dir, "block")
-	// major 242, minor 9, like /dev/nvme0
-	if err := unix.Mknod(block, 0600|syscall.S_IFBLK, int(unix.Mkdev(242, 9))); err != nil {
-		t.Fatal(err)
-	}
-
-	fifo := filepath.Join(dir, "fifo")
-	if err := unix.Mkfifo(fifo, 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	sock := filepath.Join(dir, "sock")
-	ln, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { ln.Close() })
-}
-
-func VerifyDummyDeviceFiles(t *testing.T, source, dest string) {
-	{
-		sourcest, err := os.Stat(filepath.Join(source, "char"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		destst, err := os.Stat(filepath.Join(dest, "char"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if destst.Mode().Type()&os.ModeCharDevice == 0 {
-			t.Fatalf("unexpected type: got %v, want character device", destst.Mode())
-		}
-		destsys, ok := destst.Sys().(*syscall.Stat_t)
-		if !ok {
-			t.Fatal("stat does not contain rdev")
-		}
-		sourcesys, ok := sourcest.Sys().(*syscall.Stat_t)
-		if !ok {
-			t.Fatal("stat does not contain rdev")
-		}
-		if got, want := destsys.Rdev, sourcesys.Rdev; got != want {
-			t.Fatalf("unexpected rdev: got %v, want %v", got, want)
-		}
-	}
-
-	{
-		sourcest, err := os.Stat(filepath.Join(source, "block"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		destst, err := os.Stat(filepath.Join(dest, "block"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if destst.Mode().Type()&os.ModeDevice == 0 ||
-			destst.Mode().Type()&os.ModeCharDevice != 0 {
-			t.Fatalf("unexpected type: got %v, want block device", destst.Mode())
-		}
-		destsys, ok := destst.Sys().(*syscall.Stat_t)
-		if !ok {
-			t.Fatal("stat does not contain rdev")
-		}
-		sourcesys, ok := sourcest.Sys().(*syscall.Stat_t)
-		if !ok {
-			t.Fatal("stat does not contain rdev")
-		}
-		if got, want := destsys.Rdev, sourcesys.Rdev; got != want {
-			t.Fatalf("unexpected rdev: got %v, want %v", got, want)
-		}
-	}
-
-	{
-		st, err := os.Stat(filepath.Join(dest, "fifo"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if st.Mode().Type()&os.ModeNamedPipe == 0 {
-			t.Fatalf("unexpected type: got %v, want fifo", st.Mode())
-		}
-	}
-
-	{
-		st, err := os.Stat(filepath.Join(dest, "sock"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if st.Mode().Type()&os.ModeSocket == 0 {
-			t.Fatalf("unexpected type: got %v, want socket", st.Mode())
-		}
-	}
 }
 
 func ConstructLargeDataFile(headPattern, bodyPattern, endPattern []byte) []byte {

@@ -3,6 +3,7 @@ package receiver_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -59,6 +60,11 @@ func TestReceiverListing(t *testing.T) {
 	want := `drwxr-xr-x        4096 2009/11/10 23:00:00 .
 -rw-r--r--           5 2009/11/10 23:00:00 hello
 `
+	if runtime.GOOS == "windows" {
+		want = `drwxrwxrwx        4096 2009/11/10 23:00:00 .
+-rw-rw-rw-           5 2009/11/10 23:00:00 hello
+`
+	}
 	if diff := cmp.Diff(want, string(stdout)); diff != "" {
 		t.Fatalf("unexpected listing: diff (-want +got):\n%s", diff)
 	}
