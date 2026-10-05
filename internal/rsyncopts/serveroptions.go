@@ -179,7 +179,7 @@ func (o *Options) ServerOptions() []string {
 	case 1:
 		sargv = append(sargv, "--append")
 	case 2:
-		sargv = append(sargv, "--append-verify")
+		sargv = append(sargv, "--append", "--append")
 	}
 
 	// if (force_delete)

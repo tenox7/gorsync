@@ -86,7 +86,10 @@ func (w *MultiplexReader) Read(p []byte) (n int, err error) {
 		return 0, err
 	}
 	switch tag {
-	case MsgErrorXfer, MsgError, MsgWarning, MsgLog:
+	case MsgErrorXfer, MsgError:
+		w.Env.XferErrors.Add(1)
+		fallthrough
+	case MsgWarning, MsgLog:
 		w.Env.Logf("rsync: %s", strings.TrimRight(string(payload), "\n"))
 		// io.ReadFull will call Read again
 		return 0, nil
@@ -111,8 +114,8 @@ type Buffer struct {
 	buf bytes.Buffer
 }
 
-func (b *Buffer) WriteByte(data byte) {
-	binary.Write(&b.buf, binary.LittleEndian, data)
+func (b *Buffer) WriteByte(data byte) error {
+	return binary.Write(&b.buf, binary.LittleEndian, data)
 }
 
 func (b *Buffer) WriteInt32(data int32) {

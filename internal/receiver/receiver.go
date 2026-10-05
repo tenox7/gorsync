@@ -163,13 +163,24 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 	wr := io.MultiWriter(out, h)
 
 	offset := 0
-	if rt.Opts.AppendMode > 0 && sh.ChecksumCount > 0 {
+	appended := rt.Opts.AppendMode > 0 && sh.ChecksumCount > 0
+	if appended {
 		// Match rsync/receiver.c:receive_data — seek past the existing prefix
-		// and append the incoming literals after it. MD4 is computed over the
-		// new bytes only (plain --append: receiver trusts existing prefix).
+		// and append the incoming literals after it. At this protocol level
+		// append always verifies: the existing prefix is folded into the sum
+		// so the sender's whole-file MD4 checks it, unless the caller asked
+		// for an unverified append.
 		prefix := int64(sh.ChecksumCount) * int64(sh.BlockLength)
 		if sh.RemainderLength != 0 {
 			prefix -= int64(sh.BlockLength) - int64(sh.RemainderLength)
+		}
+		if !rt.Opts.UnverifiedAppend {
+			if localFile == nil {
+				return fmt.Errorf("append-verify: %s has no existing data to verify", f.Name)
+			}
+			if _, err := io.Copy(h, io.NewSectionReader(localFile, 0, prefix)); err != nil {
+				return fmt.Errorf("append-verify: reading prefix of %s: %w", f.Name, err)
+			}
 		}
 		if err := out.SeekToAppendOffset(prefix); err != nil {
 			return fmt.Errorf("append: seek to %d: %w", prefix, err)
@@ -225,7 +236,19 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 	if _, err := io.ReadFull(rt.Conn.Reader, remoteSum); err != nil {
 		return err
 	}
-	if !bytes.Equal(localSum, remoteSum) {
+	switch {
+	case bytes.Equal(localSum, remoteSum):
+	case appended && rt.Opts.UnverifiedAppend:
+		if rt.Opts.DebugGTE(rsyncopts.DEBUG_DELTASUM, 1) {
+			rt.Logger.Printf("append of %s accepted unverified", f.Name)
+		}
+	case appended:
+		fate := "discarded"
+		if rt.Opts.Inplace || rt.Opts.KeepPartial {
+			fate = "retained"
+		}
+		return fmt.Errorf("%s failed verification -- update %s", f.Name, fate)
+	default:
 		return fmt.Errorf("file corruption in %s", f.Name)
 	}
 	if rt.Opts.DebugGTE(rsyncopts.DEBUG_DELTASUM, 1) {

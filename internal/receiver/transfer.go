@@ -45,6 +45,16 @@ type TransferOpts struct {
 	// DoFsync fsyncs every written file (--fsync).
 	DoFsync bool
 
+	// OnFile, when set, is called for every file list entry as it is
+	// received, in wire order, before the list is sorted.
+	OnFile func(*File)
+
+	// UnverifiedAppend accepts an appended tail without the file sum check:
+	// the sender's sum covers the whole file, so a destination that holds a
+	// placeholder rather than the real prefix can never match it. The remote
+	// sum is still read to keep the stream in step.
+	UnverifiedAppend bool
+
 	InfoGTE  func(rsyncopts.InfoLevel, uint16) bool
 	DebugGTE func(rsyncopts.DebugLevel, uint16) bool
 }

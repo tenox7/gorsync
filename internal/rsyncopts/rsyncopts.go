@@ -735,14 +735,25 @@ func (o *Options) AlwaysChecksum() bool       { return o.always_checksum != 0 }
 func (o *Options) WholeFile() bool            { return o.whole_file > 0 }
 func (o *Options) IgnoreTimes() bool          { return o.ignore_times != 0 }
 func (o *Options) Inplace() bool              { return o.inplace != 0 }
-func (o *Options) AppendMode() int            { return o.append_mode }
-func (o *Options) KeepPartial() bool          { return o.keep_partial != 0 || o.inplace != 0 }
-func (o *Options) PartialDir() string         { return o.partial_dir }
-func (o *Options) OutputMOTD() bool           { return o.output_motd != 0 }
-func (o *Options) RsyncPort() int             { return o.rsync_port }
-func (o *Options) PasswordFile() string       { return o.password_file }
-func (o *Options) XferDirs() int              { return o.xfer_dirs }
-func (o *Options) FilterRules() []string      { return o.filterRules }
+
+// AppendMode is 0, or 2 for --append and --append-verify alike: below
+// protocol 30 rsync promotes --append to --append-verify
+// (rsync/compat.c:setup_protocol), and gorsync speaks protocol 27, so the
+// peer always folds the existing prefix into the file sum. ServerOptions
+// still forwards the flag as given; the peer applies the same rule.
+func (o *Options) AppendMode() int {
+	if o.append_mode == 1 {
+		return 2
+	}
+	return o.append_mode
+}
+func (o *Options) KeepPartial() bool     { return o.keep_partial != 0 || o.inplace != 0 }
+func (o *Options) PartialDir() string    { return o.partial_dir }
+func (o *Options) OutputMOTD() bool      { return o.output_motd != 0 }
+func (o *Options) RsyncPort() int        { return o.rsync_port }
+func (o *Options) PasswordFile() string  { return o.password_file }
+func (o *Options) XferDirs() int         { return o.xfer_dirs }
+func (o *Options) FilterRules() []string { return o.filterRules }
 
 // ReceiverWantsFilterList mirrors rsync/exclude.c:send_filter_list: the sender
 // transmits its filter list (so the receiver can protect matched paths from
@@ -1501,7 +1512,13 @@ func (pc *Context) ParseArguments(osenv *rsyncos.Env, args []string) error {
 			return errNotYetImplemented
 
 		case OPT_APPEND:
-			opts.append_mode = 1
+			// rsync/options.c: a second --append means --append-verify, which
+			// is how server_options spells mode 2 to older servers.
+			if opts.append_mode == 1 {
+				opts.append_mode = 2
+			} else {
+				opts.append_mode = 1
+			}
 
 		case OPT_LINK_DEST,
 			OPT_COPY_DEST,

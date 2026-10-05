@@ -147,7 +147,7 @@ func rsyncMain(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 		}
 		negotiate = false // already done
 	}
-	stats, _, err := ClientRun(ctx, osenv, opts, conn, paths, negotiate)
+	stats, _, err := ClientRun(ctx, osenv, opts, conn, paths, negotiate, ClientHooks{})
 	if err != nil {
 		return nil, err
 	}
@@ -261,8 +261,33 @@ func doCmd(osenv *rsyncos.Env, opts *rsyncopts.Options, machine, user, path stri
 	return rc, wc, nil
 }
 
+func fileInfo(f *receiver.File) rsync.FileInfo {
+	return rsync.FileInfo{
+		Name:     f.Name,
+		Length:   f.Length,
+		ModTime:  f.ModTime,
+		Mode:     f.Mode,
+		Checksum: f.Checksum,
+	}
+}
+
+func fileCallback(onFile func(rsync.FileInfo)) func(*receiver.File) {
+	if onFile == nil {
+		return nil
+	}
+	return func(f *receiver.File) { onFile(fileInfo(f)) }
+}
+
+// ClientHooks are receiver behaviours a caller opts into beyond the rsync
+// options: OnFile sees each file list entry as it is received, and
+// UnverifiedAppend accepts an appended tail without the file sum check.
+type ClientHooks struct {
+	OnFile           func(rsync.FileInfo)
+	UnverifiedAppend bool
+}
+
 // rsync/main.c:client_run
-func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriteCloser, paths []string, negotiate bool) (*rsyncstats.TransferStats, []rsync.FileInfo, error) {
+func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriteCloser, paths []string, negotiate bool, hooks ClientHooks) (*rsyncstats.TransferStats, []rsync.FileInfo, error) {
 	conn, stop := rsyncwire.WrapCtx(ctx, conn)
 	defer stop()
 	crd := &rsyncwire.CountingReader{R: conn}
@@ -398,6 +423,9 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 
 			DoFsync: opts.DoFsync(),
 
+			OnFile:           fileCallback(hooks.OnFile),
+			UnverifiedAppend: hooks.UnverifiedAppend,
+
 			InfoGTE:  opts.InfoGTE,
 			DebugGTE: opts.DebugGTE,
 		},
@@ -455,13 +483,7 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 
 	fileInfos := make([]rsync.FileInfo, len(fileList))
 	for i, f := range fileList {
-		fileInfos[i] = rsync.FileInfo{
-			Name:     f.Name,
-			Length:   f.Length,
-			ModTime:  f.ModTime,
-			Mode:     f.Mode,
-			Checksum: f.Checksum,
-		}
+		fileInfos[i] = fileInfo(f)
 	}
 
 	stats, err := rt.Do(c, fileList, false)

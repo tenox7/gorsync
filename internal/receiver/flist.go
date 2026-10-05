@@ -235,6 +235,9 @@ func (rt *Transfer) ReceiveFileList() ([]*File, error) {
 				f.Gid)
 		}
 		fileList = append(fileList, f)
+		if rt.Opts.OnFile != nil {
+			rt.Opts.OnFile(f)
+		}
 		if rt.Opts.Progress && len(fileList)%100 == 0 {
 			fmt.Fprintf(rt.Env.Stdout, "\r%d files to consider", len(fileList))
 		}

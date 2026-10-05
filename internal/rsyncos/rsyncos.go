@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"sync/atomic"
 
 	"github.com/gokrazy/rsync/internal/log"
 )
@@ -18,6 +19,10 @@ type Env struct {
 	// DialContext, when set, replaces the default TCP dialer used to reach an
 	// rsync:// daemon. Lets callers meter or route the connection.
 	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
+
+	// XferErrors counts the MSG_ERROR_XFER and MSG_ERROR messages the peer
+	// sent; rsync itself turns any of them into exit code 23.
+	XferErrors atomic.Int32
 
 	logger log.Logger
 }

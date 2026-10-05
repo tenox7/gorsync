@@ -73,11 +73,34 @@ func DontRestrict() Option {
 	})
 }
 
+// WithFileListCallback calls fn for each file list entry as it arrives, in
+// the sender's order and before the list is sorted, so a caller can act on a
+// large tree while it is still being received. fn runs on the Run goroutine;
+// Result.FileList is unaffected.
+func WithFileListCallback(fn func(rsync.FileInfo)) Option {
+	return clientOptionFunc(func(c *Client) {
+		c.onFile = fn
+	})
+}
+
+// WithUnverifiedAppend makes an --append receive accept the tail without the
+// whole-file sum check. Below protocol 30 the sender's sum always covers the
+// existing prefix, so a destination holding a placeholder of the right size
+// rather than the real bytes can only be served this way; the caller takes
+// on verifying the result.
+func WithUnverifiedAppend() Option {
+	return clientOptionFunc(func(c *Client) {
+		c.unverifiedAppend = true
+	})
+}
+
 type Client struct {
-	osenv     *rsyncos.Env
-	opts      *rsyncopts.Options
-	negotiate bool
-	sender    bool
+	osenv            *rsyncos.Env
+	opts             *rsyncopts.Options
+	negotiate        bool
+	sender           bool
+	onFile           func(rsync.FileInfo)
+	unverifiedAppend bool
 }
 
 // New creates a new [Client]. You can call [Client.Run] one or more times with
@@ -120,6 +143,9 @@ func (c *Client) ServerCommandOptions(path string, paths ...string) []string {
 type Result struct {
 	Stats    *rsyncstats.TransferStats
 	FileList []rsync.FileInfo
+	// XferErrors is the number of per-file errors the peer reported during
+	// the run (rsync exits with code 23 when it is non-zero).
+	XferErrors int
 }
 
 // Run starts one run of the rsync protocol (not the rsync daemon protocol), see
@@ -141,11 +167,12 @@ type Result struct {
 // [Client.ServerCommandOptions] to the server and then arrange for two
 // [io.ReadWriteCloser] connections between client and server.
 func (c *Client) Run(ctx context.Context, conn io.ReadWriteCloser, paths []string) (*Result, error) {
-	stats, fileList, err := maincmd.ClientRun(ctx, c.osenv, c.opts, conn, paths, c.negotiate)
+	c.osenv.XferErrors.Store(0)
+	stats, fileList, err := maincmd.ClientRun(ctx, c.osenv, c.opts, conn, paths, c.negotiate, maincmd.ClientHooks{OnFile: c.onFile, UnverifiedAppend: c.unverifiedAppend})
 	if err != nil {
 		return nil, err
 	}
-	return &Result{Stats: stats, FileList: fileList}, nil
+	return &Result{Stats: stats, FileList: fileList, XferErrors: int(c.osenv.XferErrors.Load())}, nil
 }
 
 // RunDaemon starts one run of the rsync daemon protocol, meaning it performs

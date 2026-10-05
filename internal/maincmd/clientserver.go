@@ -86,7 +86,7 @@ func socketClient(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Optio
 	if done {
 		return nil, nil
 	}
-	stats, _, err := ClientRun(ctx, osenv, opts, conn, paths, false)
+	stats, _, err := ClientRun(ctx, osenv, opts, conn, paths, false, ClientHooks{})
 	if err != nil {
 		return nil, err
 	}

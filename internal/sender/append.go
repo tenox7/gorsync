@@ -21,9 +21,9 @@ import (
 // its existing file. Block-ref tokens would cause the receiver to duplicate
 // the prefix.
 //
-// With --append (mode 1), the sender does not verify the prefix; the receiver's
-// existing bytes are trusted. --append-verify (mode 2) is parsed but currently
-// behaves identically to mode 1; adding the prefix checksum is a future change.
+// The trailing file sum covers the existing prefix as well as the tail, as
+// rsync does for --append-verify, which below protocol 30 is what --append
+// means too; a receiver whose prefix differs fails the file.
 func (st *Transfer) sendFileAppend(head rsync.SumHead, fileIndex int32, fl file) error {
 	f, err := fl.source.Open(fl.path)
 	if err != nil {
@@ -61,29 +61,12 @@ func (st *Transfer) sendFileAppend(head rsync.SumHead, fileIndex int32, fl file)
 	h := md4.New()
 	binary.Write(h, binary.LittleEndian, st.Seed)
 
-	// Phase 1 (the redo pass) expects MD4 of the *whole* source file rather
-	// than just the appended tail. Kick that off in parallel here so phase 1
-	// doesn't have to re-read the source and so the sender never has to call
-	// hashSearch — see sendFileAppendVerify.
-	fullSumCh := st.appendSumPending(fileIndex)
-	go func() {
-		fh := md4.New()
-		binary.Write(fh, binary.LittleEndian, st.Seed)
-		f2, err := fl.source.Open(fl.path)
-		if err != nil {
-			fullSumCh <- nil
-			return
-		}
-		defer f2.Close()
-		var buf [readBufSize]byte
-		if _, err := io.CopyBuffer(fh, f2, buf[:]); err != nil {
-			fullSumCh <- nil
-			return
-		}
-		fullSumCh <- fh.Sum(nil)
-	}()
-
-	if _, err := f.Seek(prefixSize, io.SeekStart); err != nil {
+	// The trailing sum covers the whole file, prefix included
+	// (rsync/match.c:match_sums with append_mode 2, which is what every
+	// append is below protocol 30), so the receiver can check the bytes it
+	// already holds. Reading the prefix through the hash positions f at the
+	// tail; the sum doubles as the phase-1 redo sum, see sendFileAppendVerify.
+	if _, err := io.CopyN(h, f, prefixSize); err != nil {
 		return err
 	}
 	buf := make([]byte, readBufSize)
@@ -124,6 +107,7 @@ func (st *Transfer) sendFileAppend(head rsync.SumHead, fileIndex int32, fl file)
 	}
 
 	sum := h.Sum(nil)
+	st.appendSumPending(fileIndex) <- sum
 	if _, err := st.Conn.Writer.Write(sum); err != nil {
 		return err
 	}
