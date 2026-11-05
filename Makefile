@@ -18,7 +18,20 @@ systemd: all
 	sudo systemctl restart gokr-rsyncd.socket)
 
 test:
+	go vet ./...
 	GOGC=off CGO_ENABLED=0 go test -fullpath ./...
+
+MEMLIMITRUN := systemd-run --user --scope -p MemoryMax=4G -p OOMPolicy=continue --quiet
+# The fuzz target limits memory to 4 GB and reduces parallel workers.
+# This limits the impact of large memory allocations (via fuzzed values).
+# Note that GOGC must not be set to GOGC=off for this target.
+fuzz:
+	CGO_ENABLED=0 $(MEMLIMITRUN) go test -parallel=4 -fuzz=ReceiveFileList -fuzztime=10s -fullpath ./internal/receiver
+	CGO_ENABLED=0 $(MEMLIMITRUN) go test -parallel=4 -fuzz=RecvFiles -fuzztime=10s -fullpath ./internal/receiver
+	CGO_ENABLED=0 $(MEMLIMITRUN) go test -parallel=4 -fuzz=RecvFilterList -fuzztime=10s -fullpath ./internal/sender
+	CGO_ENABLED=0 $(MEMLIMITRUN) go test -parallel=4 -fuzz=ReceiveSums -fuzztime=10s -fullpath ./internal/sender
+	CGO_ENABLED=0 $(MEMLIMITRUN) go test -parallel=4 -fuzz=SendFiles -fuzztime=10s -fullpath ./internal/sender
+	CGO_ENABLED=0 $(MEMLIMITRUN) go test -parallel=4 -fuzz=ParseArguments -fuzztime=10s -fullpath ./internal/rsyncopts
 
 privileged-test:
 	GOGC=off CGO_ENABLED=0 sudo go test -fullpath ./integration/interop ./integration/receiver

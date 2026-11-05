@@ -166,6 +166,8 @@ type Result struct {
 // custom RPC protocol. In that case, you will need to transport the
 // [Client.ServerCommandOptions] to the server and then arrange for two
 // [io.ReadWriteCloser] connections between client and server.
+//
+// Canceling ctx closes conn, which aborts the transfer.
 func (c *Client) Run(ctx context.Context, conn io.ReadWriteCloser, paths []string) (*Result, error) {
 	c.osenv.XferErrors.Store(0)
 	stats, fileList, err := maincmd.ClientRun(ctx, c.osenv, c.opts, conn, paths, c.negotiate, maincmd.ClientHooks{OnFile: c.onFile, UnverifiedAppend: c.unverifiedAppend})
@@ -182,6 +184,8 @@ func (c *Client) Run(ctx context.Context, conn io.ReadWriteCloser, paths []strin
 // This method is useful when you want to connect to an rsync daemon, but
 // establish the connection yourself, e.g. via the [golang.org/x/crypto/ssh]
 // package.
+//
+// Canceling ctx closes conn, which aborts the transfer.
 func (c *Client) RunDaemon(ctx context.Context, conn io.ReadWriteCloser, remotePath string, paths []string) (*Result, error) {
 	done, err := maincmd.StartInbandExchange(ctx, c.osenv, c.opts, conn, remotePath)
 	if err != nil {

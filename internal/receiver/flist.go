@@ -92,7 +92,7 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 	}
 	// linux/limits.h
 	const PATH_MAX = 4096
-	if l2 >= PATH_MAX-l1 {
+	if l2 < 0 || l2 >= PATH_MAX-l1 {
 		const lastname = ""
 		return nil, fmt.Errorf("overflow: flags=0x%x l1=%d l2=%d lastname=%s",
 			flags, l1, l2, lastname)
@@ -182,6 +182,10 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 		length, err := rt.Conn.ReadInt32()
 		if err != nil {
 			return nil, err
+		}
+		// rsync/flist.c:recv_file_entry
+		if length <= 0 || length > PATH_MAX {
+			return nil, fmt.Errorf("overflow: symlink target length=%d", length)
 		}
 		b := make([]byte, length)
 		if _, err := io.ReadFull(rt.Conn.Reader, b); err != nil {

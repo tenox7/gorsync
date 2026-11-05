@@ -1,6 +1,7 @@
 package sender
 
 import (
+	"fmt"
 	"io"
 	"path"
 	"path/filepath"
@@ -56,6 +57,7 @@ func (l *filterRuleList) Excluded(name string) bool {
 func RecvFilterList(c *rsyncwire.Conn) (*filterRuleList, error) {
 	var l filterRuleList
 	const exclusionListEnd = 0
+	const bigpathbuflen = 4096 + 1024 // matches rsync.h
 	for {
 		length, err := c.ReadInt32()
 		if err != nil {
@@ -63,6 +65,9 @@ func RecvFilterList(c *rsyncwire.Conn) (*filterRuleList, error) {
 		}
 		if length == exclusionListEnd {
 			break
+		}
+		if length < 0 || length >= bigpathbuflen {
+			return nil, fmt.Errorf("overflow: filter rule length=%d", length)
 		}
 		line := make([]byte, length)
 		if _, err := io.ReadFull(c.Reader, line); err != nil {
@@ -72,6 +77,9 @@ func RecvFilterList(c *rsyncwire.Conn) (*filterRuleList, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Upstream rejects wildcard rules here because its matcher cannot
+		// handle them; this fork's matches() does (path.Match), and clients
+		// rely on "- *" and "/name/***" for surgical --delete.
 		l.addRule(fr)
 	}
 	return &l, nil

@@ -145,8 +145,8 @@ func (st *Transfer) receiveSumsForPhase(appendShortcut bool) (rsync.SumHead, err
 		return head, err
 	}
 	var offset int64
-	head.Sums = make([]rsync.SumBuf, int(head.ChecksumCount))
 	if appendShortcut {
+		head.Sums = make([]rsync.SumBuf, int(head.ChecksumCount))
 		for i := int32(0); i < head.ChecksumCount; i++ {
 			sb := rsync.SumBuf{Index: i, Offset: offset}
 			if i == head.ChecksumCount-1 && head.RemainderLength != 0 {
@@ -159,6 +159,8 @@ func (st *Transfer) receiveSumsForPhase(appendShortcut bool) (rsync.SumHead, err
 		}
 		return head, nil
 	}
+	// Grow head.Sums as checksums arrive instead of trusting ChecksumCount
+	// up front: a peer has to actually send the data it claims.
 	for i := int32(0); i < head.ChecksumCount; i++ {
 		shortChecksum, err := st.Conn.ReadInt32()
 		if err != nil {
@@ -182,7 +184,7 @@ func (st *Transfer) receiveSumsForPhase(appendShortcut bool) (rsync.SumHead, err
 		_ = n
 		// st.logger.Printf("chunk[%d] len=%d offset=%.0f sum1=%08x, sum2=%x",
 		// 	i, sb.len, float64(sb.offset), sb.sum1, sb.sum2[:n])
-		head.Sums[i] = sb
+		head.Sums = append(head.Sums, sb)
 	}
 	return head, nil
 }
@@ -238,7 +240,7 @@ func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 		return nil
 	})
 
-	offset := 0
+	var offset int64
 	buf := make([]byte, readBufSize)
 	for {
 		if st.Opts.InfoGTE(rsyncopts.INFO_PROGRESS, 1) {
@@ -252,10 +254,11 @@ func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 			return err
 		}
 		// chunk size (“rawtok” variable in openrsync); split into wire tokens
-		// no larger than chunkSize, which the receiver caps at rsync's CHUNK_SIZE.
+		// no larger than rsync.ChunkSize, which the receiver caps at rsync's
+		// CHUNK_SIZE.
 		data := buf[:n]
 		for len(data) > 0 {
-			m := min(len(data), chunkSize)
+			m := min(len(data), rsync.ChunkSize)
 			if err := st.Conn.WriteInt32(int32(m)); err != nil {
 				return err
 			}
@@ -263,7 +266,7 @@ func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 				return err
 			}
 			data = data[m:]
-			offset += m
+			offset += int64(m)
 		}
 	}
 	if st.Opts.InfoGTE(rsyncopts.INFO_PROGRESS, 1) {

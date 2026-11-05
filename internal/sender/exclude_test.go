@@ -1,6 +1,12 @@
 package sender
 
-import "testing"
+import (
+	"io"
+	"strings"
+	"testing"
+
+	"github.com/gokrazy/rsync/internal/rsyncwire"
+)
 
 func buildList(t *testing.T, rules ...string) *filterRuleList {
 	t.Helper()
@@ -35,6 +41,40 @@ func TestExcludedSurgicalFileDelete(t *testing.T) {
 
 func TestExcludedSurgicalDirDelete(t *testing.T) {
 	l := buildList(t, "+ /foo", "+ /foo/***", "- *")
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{"foo", false},
+		{"foo/inner", false},
+		{"bar", true},
+		{"bar/inner", true},
+	}
+	for _, c := range cases {
+		if got := l.Excluded(c.name); got != c.want {
+			t.Errorf("Excluded(%q) = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// TestRecvFilterListAcceptsWildcards reads a wire-encoded filter list with the
+// rules a surgical --delete sends. Upstream's RecvFilterList rejects wildcard
+// rules ("wildcard filter rules not yet implemented"); this fork matches them,
+// so that rejection must not come back with an upstream merge.
+func TestRecvFilterListAcceptsWildcards(t *testing.T) {
+	var wire rsyncwire.Buffer
+	for _, rule := range []string{"+ /foo", "+ /foo/***", "- *"} {
+		wire.WriteInt32(int32(len(rule)))
+		wire.WriteString(rule)
+	}
+	wire.WriteInt32(0) // end of list
+	l, err := RecvFilterList(&rsyncwire.Conn{
+		Reader: io.NopCloser(strings.NewReader(wire.String())),
+		Writer: nopClose(io.Discard),
+	})
+	if err != nil {
+		t.Fatalf("RecvFilterList: %v", err)
+	}
 	cases := []struct {
 		name string
 		want bool

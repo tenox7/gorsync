@@ -84,10 +84,10 @@ func (st *Transfer) sendFileAppend(head rsync.SumHead, fileIndex int32, fl file)
 		}
 		chunk := buf[:n]
 		h.Write(chunk)
-		// Split into wire tokens no larger than chunkSize (rsync's CHUNK_SIZE);
-		// longer literal tokens are rejected by the receiver.
+		// Split into wire tokens no larger than rsync.ChunkSize (rsync's
+		// CHUNK_SIZE); longer literal tokens are rejected by the receiver.
 		for len(chunk) > 0 {
-			m := min(len(chunk), chunkSize)
+			m := min(len(chunk), rsync.ChunkSize)
 			if err := st.Conn.WriteInt32(int32(m)); err != nil {
 				return err
 			}

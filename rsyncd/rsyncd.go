@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gokrazy/rsync"
@@ -189,9 +190,12 @@ func checkACL(acls []string, remoteAddr string) error {
 	return nil
 }
 
-// FIXME: context cancellation not yet implemented
 func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
-	_ = ctx // not implemented. what would be the best thing to do? wrap conn's reader part with cancelable reader?
+	stop := context.AfterFunc(ctx, func() {
+		// Pending Read or Write calls will return with an error.
+		conn.closer.Close()
+	})
+	defer stop()
 
 	const terminationCommand = "@RSYNCD: OK\n"
 	cwr := conn.cwr
@@ -201,21 +205,21 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 	fmt.Fprintf(cwr, "@RSYNCD: %d\n", rsync.ProtocolVersion)
 
 	// read client greeting
-	clientGreeting, err := rd.ReadString('\n')
+	clientGreeting, err := rd.ReadSlice('\n')
 	if err != nil {
 		return err
 	}
-	if !strings.HasPrefix(clientGreeting, "@RSYNCD: ") {
-		return fmt.Errorf("invalid client greeting: got %q", clientGreeting)
+	if got := string(clientGreeting); !strings.HasPrefix(got, "@RSYNCD: ") {
+		return fmt.Errorf("invalid client greeting: got %q", got)
 	}
 	// TODO: protocol negotiation
 
 	// read requested module(s), if any
-	requestedModule, err := rd.ReadString('\n')
+	line, err := rd.ReadSlice('\n')
 	if err != nil {
 		return err
 	}
-	requestedModule = strings.TrimSpace(requestedModule)
+	requestedModule := strings.TrimSpace(string(line))
 	if requestedModule == "" || requestedModule == "#list" {
 		s.logger.Printf("client %v requested rsync module listing", conn.name)
 		io.WriteString(cwr, s.formatModuleList())
@@ -246,14 +250,18 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 	// read requested flags
 	var flags []string
 	for {
-		flag, err := rd.ReadString('\n')
+		line, err := rd.ReadSlice('\n')
 		if err != nil {
 			return err
 		}
-		flag = strings.TrimSpace(flag)
+		flag := strings.TrimSpace(string(line))
 		s.logger.Printf("client sent: %q", flag)
 		if flag == "" {
 			break
+		}
+		const maxArgs = 1000 // matches rsync.h:MAX_ARGS
+		if len(flags) >= maxArgs {
+			return fmt.Errorf("too many args")
 		}
 		flags = append(flags, flag)
 	}
@@ -475,7 +483,8 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 
 			AppendMode: opts.AppendMode(),
 
-			DoFsync: opts.DoFsync(),
+			DoFsync:     opts.DoFsync(),
+			SparseFiles: opts.SparseFiles(),
 
 			InfoGTE:  opts.InfoGTE,
 			DebugGTE: opts.DebugGTE,
@@ -624,6 +633,15 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 			case <-ctx.Done():
 				return nil // ignore expected 'use of closed network connection' error on context cancel
 			default:
+				// Keep serving even when all file descriptors are in use.
+				// As older transfers finish, new connections can be accepted.
+				temporary := errors.Is(err, syscall.EMFILE) || // too many open files
+					errors.Is(err, syscall.ENFILE) // too many open files in system
+				if temporary {
+					s.logger.Printf("accept: %v (retrying)", err)
+					time.Sleep(100 * time.Millisecond)
+					continue
+				}
 				return err
 			}
 		}

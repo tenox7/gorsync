@@ -1,12 +1,19 @@
 package sender
 
+import (
+	"github.com/gokrazy/rsync"
+	"github.com/gokrazy/rsync/internal/rsyncopts"
+)
+
 // rsync/token.c:simple_send_token
 func (st *Transfer) simpleSendToken(ms *mapStruct, token int32, offset int64, n int64) error {
 	if n > 0 {
-		st.Logger.Printf("sending unmatched chunks offset=%d, n=%d", offset, n)
+		if st.Opts.DebugGTE(rsyncopts.DEBUG_DELTASUM, 3) {
+			st.Logger.Printf("sending unmatched chunks offset=%d, n=%d", offset, n)
+		}
 		l := int64(0)
 		for l < n {
-			n1 := min(int64(chunkSize), n-l)
+			n1 := min(int64(rsync.ChunkSize), n-l)
 
 			chunk, err := ms.ptr(offset+l, int32(n1))
 			if err != nil {

@@ -1,70 +1,55 @@
 package rsyncd_test
 
 import (
+	"bufio"
 	"context"
-	"log"
+	"io"
 	"net"
-	"testing/fstest"
+	"testing"
+	"time"
 
+	"github.com/gokrazy/rsync/internal/rsynctest"
 	"github.com/gokrazy/rsync/rsyncd"
 )
 
-func ExampleNewServer() {
-	listener, err := net.Listen("tcp", "localhost:8873")
+func TestContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	// rsynctest.New serves on context.Background(),
+	// so we manually construct an rsyncd.Server.
+	srv, err := rsyncd.NewServer(rsynctest.InteropModule(tmp), rsyncd.DontRestrict())
 	if err != nil {
-		log.Fatal(err)
+		t.Fatal(err)
 	}
 
-	rsyncServer, err := rsyncd.NewServer([]rsyncd.Module{
-		{
-			Name: "music",
-			Path: "/home/bob/Music",
-		},
-	})
+	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
-		log.Fatal(err)
+		t.Fatal(err)
 	}
+	defer ln.Close()
 
-	if err := rsyncServer.Serve(context.Background(), listener); err != nil {
-		log.Fatal(err)
-	}
-}
+	ctx, cancel := context.WithCancel(t.Context())
+	go srv.Serve(ctx, ln)
 
-// ExampleNewServer_fsFS shows how to serve an rsync module backed by an [fs.FS]
-// instead of a filesystem path. This allows serving files from in-memory
-// filesystems, embedded files, or any other [fs.FS] implementation.
-func ExampleNewServer_fsFS() {
-	// Create an in-memory filesystem using testing/fstest.
-	// Any fs.FS implementation works (embed.FS, zip archives, etc.)
-	memfs := fstest.MapFS{
-		"hello.txt": &fstest.MapFile{
-			Data: []byte("Hello from fs.FS!"),
-			Mode: 0o644,
-		},
-		"readme.md": &fstest.MapFile{
-			Data: []byte("# Welcome\nThis is served from memory."),
-			Mode: 0o644,
-		},
-	}
-
-	listener, err := net.Listen("tcp", "localhost:8873")
+	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
-		log.Fatal(err)
+		t.Fatal(err)
 	}
-
-	rsyncServer, err := rsyncd.NewServer([]rsyncd.Module{
-		{
-			Name: "inmemory",
-			FS:   memfs,
-		},
-	})
-	if err != nil {
-		log.Fatal(err)
+	defer conn.Close()
+	// Read the server greeting to make sure the server goroutine
+	// is stuck in a Read() call when we cancel.
+	rd := bufio.NewReader(conn)
+	if _, err := rd.ReadSlice('\n'); err != nil {
+		t.Fatal(err)
 	}
+	cancel()
 
-	log.Printf("listening; now run: rsync -av rsync://%s/inmemory", listener.Addr())
-
-	if err := rsyncServer.Serve(context.Background(), listener); err != nil {
-		log.Fatal(err)
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.ReadAll(conn); err != nil {
+		if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			t.Fatalf("daemon unexpectedly did not close the connection")
+		}
+		t.Fatal(err)
 	}
 }

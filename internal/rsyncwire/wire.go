@@ -22,6 +22,7 @@ const (
 	MsgWarning     uint8 = 4
 	MsgErrorSocket uint8 = 5
 	MsgLog         uint8 = 6
+	MsgSuccess     uint8 = 100 // successfully updated indicated flist index
 )
 
 const mplexBase = 7
@@ -98,6 +99,12 @@ func (w *MultiplexReader) Read(p []byte) (n int, err error) {
 		return 0, nil
 	case MsgErrorSocket:
 		return 0, fmt.Errorf("rsync socket error: %s", strings.TrimRight(string(payload), "\n"))
+	case MsgSuccess:
+		// openrsync after 7c31e9525e89515401257621ddd7fb9f8019818d
+		// ("Massive up-merge of Apple's openrsync") started
+		// sending MsgSuccess unconditionally after every file.
+		// Ignore MsgSuccess for now to restore compatibility.
+		return 0, nil
 	case MsgData:
 		// continues below
 	default:

@@ -151,6 +151,7 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 		KeepPartial: rt.Opts.KeepPartial,
 		PartialDir:  rt.Opts.PartialDir,
 		Fsync:       rt.Opts.DoFsync,
+		Sparse:      rt.Opts.SparseFiles,
 	})
 	if err != nil {
 		return err
@@ -162,7 +163,8 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 
 	wr := io.MultiWriter(out, h)
 
-	offset := 0
+	var buf [rsync.ChunkSize]byte
+	var offset int64
 	appended := rt.Opts.AppendMode > 0 && sh.ChecksumCount > 0
 	if appended {
 		// Match rsync/receiver.c:receive_data — seek past the existing prefix
@@ -185,10 +187,10 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 		if err := out.SeekToAppendOffset(prefix); err != nil {
 			return fmt.Errorf("append: seek to %d: %w", prefix, err)
 		}
-		offset = int(prefix)
+		offset = prefix
 	}
 	for {
-		token, data, err := rt.recvToken()
+		token, err := rt.Conn.ReadInt32()
 		if err != nil {
 			return err
 		}
@@ -204,9 +206,21 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 			}
 		}
 		if token > 0 {
-			n, err := wr.Write(data)
+			// rsync's CHUNK_SIZE is the longest literal token; real rsync
+			// rejects longer ones with this message, and so do we, to stay
+			// protocol conformant and catch a peer that frames literals wrong.
+			if token > rsync.ChunkSize {
+				return fmt.Errorf("invalid uncompressed token length %d", token)
+			}
+			tokenReader := io.LimitReader(rt.Conn.Reader, int64(token))
+			n, err := io.CopyBuffer(wr, tokenReader, buf[:])
 			if err != nil {
 				return err
+			}
+			if n != int64(token) {
+				// LimitReader turns a connection closed mid-token into a
+				// short copy without an error.
+				return io.ErrUnexpectedEOF
 			}
 			offset += n
 			continue
@@ -220,14 +234,14 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 		if token == sh.ChecksumCount-1 && sh.RemainderLength != 0 {
 			dataLen = sh.RemainderLength
 		}
-		data = make([]byte, dataLen)
-		if _, err := localFile.ReadAt(data, offset2); err != nil {
-			return err
-		}
-
-		n, err := wr.Write(data)
+		dataReader := io.NewSectionReader(localFile, offset2, int64(dataLen))
+		n, err := io.CopyBuffer(wr, dataReader, buf[:])
 		if err != nil {
 			return err
+		}
+		if n != int64(dataLen) {
+			// The basis file shrank since the generator summed it.
+			return fmt.Errorf("reading block %d of %s: %w", token, out.Name(), io.ErrUnexpectedEOF)
 		}
 		offset += n
 	}

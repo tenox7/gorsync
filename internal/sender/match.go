@@ -31,6 +31,12 @@ func (st *Transfer) hashSearch(targets []target, tagTable map[uint16]int, head r
 		return err
 	}
 
+	if fi.Size() == 0 {
+		// The file might have been truncated after the file list was built.
+		// Either way, just send the whole file (fast path).
+		return st.sendFile(fileIndex, fl)
+	}
+
 	readSize := max(3*head.BlockLength, 256*1024)
 	ms := mapFile(f, fi.Size(), readSize, head.BlockLength)
 
@@ -72,8 +78,10 @@ func (st *Transfer) hashSearch(targets []target, tagTable map[uint16]int, head r
 
 	readChunk := func() error {
 		k = int(head.BlockLength)
-		if remaining := int(fi.Size() - offset); remaining < k {
-			k = remaining
+		if remaining := fi.Size() - offset; remaining < int64(k) {
+			// This int conversion is safe because k starts at head.BlockLength,
+			// which is verified to be <= maxBlockLen (1<<29) and only shrinks.
+			k = int(remaining)
 		}
 
 		chunk, err := ms.ptr(offset, int32(k))
@@ -146,7 +154,9 @@ Outer:
 				}
 
 				if local, remote := sum2[:head.ChecksumLength], head.Sums[i].Sum2[:head.ChecksumLength]; !bytes.Equal(local, remote) {
-					st.Logger.Printf("false alarm: local %x, remote %x", local, remote)
+					if st.Opts.DebugGTE(rsyncopts.DEBUG_DELTASUM, 3) {
+						st.Logger.Printf("false alarm: local %x, remote %x", local, remote)
+					}
 					//falseAlarms++
 					continue
 				}
@@ -210,7 +220,7 @@ Outer:
 		s1 = uint32(uint16(s1))
 		s2 = uint32(uint16(s2))
 
-		if backup >= int64(head.BlockLength)+chunkSize && end-offset > chunkSize {
+		if backup >= int64(head.BlockLength)+rsync.ChunkSize && end-offset > rsync.ChunkSize {
 			// Prevent offset-st.lastMatch from growing too large by flushing
 			// intermediate chunks.
 			if err := st.matched(h, ms, head, offset-int64(head.BlockLength), -2); err != nil {
@@ -274,8 +284,8 @@ func (st *Transfer) matched(h hash.Hash, ms *mapStruct, head rsync.SumHead, offs
 		n += head.Sums[i].Len
 	}
 
-	for j := int64(0); j < n; j += chunkSize {
-		n1 := min(int64(chunkSize), n-j)
+	for j := int64(0); j < n; j += rsync.ChunkSize {
+		n1 := min(int64(rsync.ChunkSize), n-j)
 		chunk, err := ms.ptr(st.lastMatch+j, int32(n1))
 		if err != nil {
 			return err

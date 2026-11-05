@@ -49,18 +49,11 @@ func (fl *fileList) Close() {
 	fl.Sources = nil
 }
 
-// chunkSize is rsync's CHUNK_SIZE (rsync/rsync.h): the maximum length of a
-// single literal (uncompressed) token on the wire. A receiver rejects any
-// literal token longer than this ("invalid uncompressed token length"), so it
-// is a wire-protocol constant and must not be increased. hashSearch also
-// depends on it: it declares a 256 KB window and then requests
-// 2*chunkSize+alignFudge from it, so raising chunkSize breaks transfers with
-// "file has changed mid-transfer" (upstream issue #53).
-const chunkSize = 32 * 1024
-
 // readBufSize is how much we read from the local source per syscall while
-// sending; larger than chunkSize for I/O efficiency. The data is still split
-// into chunkSize-sized wire tokens.
+// sending; larger than rsync.ChunkSize for I/O efficiency. The data is still
+// split into wire tokens of at most rsync.ChunkSize (rsync's CHUNK_SIZE): a
+// receiver rejects longer literal tokens ("invalid uncompressed token
+// length"), so the token size is a wire-protocol constant.
 const readBufSize = 256 * 1024
 
 var (
@@ -412,7 +405,7 @@ func (st *Transfer) SendFileList(localDir string, paths []string, excl *filterRu
 		strip := getStrip(requested)
 		// st.Logger.Printf("root=%q, strip=%q", root, strip)
 		if st.Opts.DebugGTE(rsyncopts.DEBUG_FLIST, 1) {
-			st.Logger.Printf("  fs.Walk(%q, %q), strip=%q", local, requested)
+			st.Logger.Printf("  fs.Walk(%q, %q), strip=%q", local, requested, strip)
 		}
 
 		sw := &scopedWalker{

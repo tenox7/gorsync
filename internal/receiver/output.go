@@ -1,6 +1,7 @@
 package receiver
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -30,6 +31,13 @@ type outputMode struct {
 	// Fsync causes each written file to be fsynced before it is renamed
 	// into place (--fsync).
 	Fsync bool
+
+	// Sparse leaves long runs of zeros as holes instead of writing them
+	// (--sparse). Only honored when writing through a temporary file: in
+	// Inplace mode a skipped run would keep the destination's old bytes where
+	// the zeros belong, and real rsync punches holes there instead, which
+	// this implementation does not do. Inplace writes the zeros.
+	Sparse bool
 }
 
 const tempFilePerm os.FileMode = 0o600
@@ -107,9 +115,42 @@ func openTempInRoot(root *os.Root, fn string) (string, *os.File, error) {
 func (p *pendingFile) Name() string { return p.finalPath }
 
 func (p *pendingFile) Write(b []byte) (int, error) {
+	if p.sparse() {
+		return p.sparseWrite(b)
+	}
 	n, err := p.f.Write(b)
 	p.written += int64(n)
 	return n, err
+}
+
+// sparse reports whether runs of zeros become holes; see outputMode.Sparse.
+func (p *pendingFile) sparse() bool { return p.mode.Sparse && !p.mode.Inplace }
+
+// zeroBlock is the shortest run of zeros that is worth turning into a hole.
+//
+// rsync/fileio.c:SPARSE_WRITE_SIZE
+var zeroBlock = make([]byte, 1024)
+
+// sparseWrite skips over zeros instead of writing them, leaving a hole in the
+// file. It positions every write itself (WriteAt at p.written), so the file
+// offset that Write would use is never consulted.
+//
+// rsync/fileio.c:write_sparse
+func (p *pendingFile) sparseWrite(buf []byte) (int, error) {
+	rest := buf
+	for len(rest) > 0 {
+		data := bytes.TrimLeft(rest, "\x00")
+		p.written += int64(len(rest) - len(data))
+		rest = nil
+		if idx := bytes.Index(data, zeroBlock); idx > -1 {
+			data, rest = data[:idx], data[idx:]
+		}
+		if _, err := p.f.WriteAt(data, p.written); err != nil {
+			return 0, err
+		}
+		p.written += int64(len(data))
+	}
+	return len(buf), nil
 }
 
 // SeekToAppendOffset positions the destination file at offset and accounts for
@@ -141,6 +182,14 @@ func (p *pendingFile) CloseAtomicallyReplace() error {
 		}
 		p.done = true
 		return nil
+	}
+	if p.sparse() {
+		// The file might end in a hole: extend it to its full size.
+		//
+		// rsync/fileio.c:sparse_end
+		if err := p.f.Truncate(p.written); err != nil {
+			return err
+		}
 	}
 	if err := p.sync(); err != nil {
 		return err

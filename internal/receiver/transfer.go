@@ -45,6 +45,10 @@ type TransferOpts struct {
 	// DoFsync fsyncs every written file (--fsync).
 	DoFsync bool
 
+	// SparseFiles turns long runs of zeros into holes (--sparse). It only
+	// applies to files written through a temporary file; see outputMode.Sparse.
+	SparseFiles bool
+
 	// OnFile, when set, is called for every file list entry as it is
 	// received, in wire order, before the list is sorted.
 	OnFile func(*File)

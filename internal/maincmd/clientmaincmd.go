@@ -125,6 +125,11 @@ func rsyncMain(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 	}
 	defer rc.Close()
 	defer wc.Close()
+	stop := context.AfterFunc(ctx, func() {
+		rc.Close()
+		wc.Close()
+	})
+	defer stop()
 	conn := &readWriteCloser{
 		r: rc,
 		w: wc,
@@ -421,7 +426,8 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 
 			AppendMode: opts.AppendMode(),
 
-			DoFsync: opts.DoFsync(),
+			DoFsync:     opts.DoFsync(),
+			SparseFiles: opts.SparseFiles(),
 
 			OnFile:           fileCallback(hooks.OnFile),
 			UnverifiedAppend: hooks.UnverifiedAppend,
