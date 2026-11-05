@@ -69,13 +69,14 @@ func (st *Transfer) sendFileAppend(head rsync.SumHead, fileIndex int32, fl file)
 	if _, err := io.CopyN(h, f, prefixSize); err != nil {
 		return err
 	}
-	buf := make([]byte, readBufSize)
+	buf := readBufs.Get().(*[readBufSize]byte)
+	defer readBufs.Put(buf)
 	offset := prefixSize
 	for {
 		if st.Opts.InfoGTE(rsyncopts.INFO_PROGRESS, 1) {
 			st.Progress.MaybeShow(uint64(offset), false)
 		}
-		n, err := f.Read(buf)
+		n, err := f.Read(buf[:])
 		if err != nil && err != io.EOF {
 			return err
 		}

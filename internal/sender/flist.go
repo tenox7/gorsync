@@ -56,6 +56,10 @@ func (fl *fileList) Close() {
 // length"), so the token size is a wire-protocol constant.
 const readBufSize = 256 * 1024
 
+// readBufs recycles readBufSize buffers across files, so a peer that asks
+// for many files does not cost fresh 256 KiB buffers per request.
+var readBufs = sync.Pool{New: func() any { return new([readBufSize]byte) }}
+
 var (
 	lookupOnce      sync.Once
 	lookupGroupOnce sync.Once

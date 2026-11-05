@@ -92,12 +92,12 @@ func (st *Transfer) SendFiles(fileList *fileList) error {
 
 		st.lastMatch = 0
 		switch {
+		case appendShortcut && head.ChecksumCount > 0:
+			// receiver has a partial prefix; stream only the trailing bytes
+			err = st.sendFileAppend(head, fileIndex, fl)
 		case len(head.Sums) == 0:
 			// fast path: send the whole file
 			err = st.sendFile(fileIndex, fl)
-		case appendShortcut:
-			// receiver has a partial prefix; stream only the trailing bytes
-			err = st.sendFileAppend(head, fileIndex, fl)
 		case phase > 0 && st.Opts.AppendMode() > 0:
 			// phase-1 redo on an --append transfer: respond without delta
 			err = st.sendFileAppendVerify(head, fileIndex, fl)
@@ -144,21 +144,12 @@ func (st *Transfer) receiveSumsForPhase(appendShortcut bool) (rsync.SumHead, err
 	if err := head.ReadFrom(st.Conn); err != nil {
 		return head, err
 	}
-	var offset int64
 	if appendShortcut {
-		head.Sums = make([]rsync.SumBuf, int(head.ChecksumCount))
-		for i := int32(0); i < head.ChecksumCount; i++ {
-			sb := rsync.SumBuf{Index: i, Offset: offset}
-			if i == head.ChecksumCount-1 && head.RemainderLength != 0 {
-				sb.Len = int64(head.RemainderLength)
-			} else {
-				sb.Len = int64(head.BlockLength)
-			}
-			offset += sb.Len
-			head.Sums[i] = sb
-		}
+		// Only the head arrives. sendFileAppend needs the prefix length it
+		// encodes, not one entry per block the peer claims to hold.
 		return head, nil
 	}
+	var offset int64
 	// Grow head.Sums as checksums arrive instead of trusting ChecksumCount
 	// up front: a peer has to actually send the data it claims.
 	for i := int32(0); i < head.ChecksumCount; i++ {
@@ -233,20 +224,24 @@ func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 			return err
 		}
 		defer f.Close()
-		var buf [readBufSize]byte
-		if _, err := io.CopyBuffer(h, f, buf[:]); err != nil {
+		buf := readBufs.Get().(*[readBufSize]byte)
+		defer readBufs.Put(buf)
+		// Hide WriteTo: *os.File has one, so CopyBuffer would ignore buf
+		// and allocate a 32 KiB buffer of its own for every file.
+		if _, err := io.CopyBuffer(h, struct{ io.Reader }{f}, buf[:]); err != nil {
 			return err
 		}
 		return nil
 	})
 
 	var offset int64
-	buf := make([]byte, readBufSize)
+	buf := readBufs.Get().(*[readBufSize]byte)
+	defer readBufs.Put(buf)
 	for {
 		if st.Opts.InfoGTE(rsyncopts.INFO_PROGRESS, 1) {
 			st.Progress.MaybeShow(uint64(offset), false)
 		}
-		n, err := f.Read(buf)
+		n, err := f.Read(buf[:])
 		if err != nil {
 			if err == io.EOF {
 				break
