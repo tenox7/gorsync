@@ -216,7 +216,8 @@ func appendFixture(t *testing.T) (srcPath, destDir string, full []byte) {
 }
 
 // runAgainstServer runs client against an in-process gorsync server that
-// parses serverArgs, and waits for both ends.
+// parses serverArgs, and waits for both ends. When one end fails, closing
+// the pipes makes the other end fail too instead of hanging.
 func runAgainstServer(t *testing.T, client *rsyncclient.Client, serverArgs, paths []string) {
 	t.Helper()
 	srv, err := rsyncd.NewServer(nil, rsyncd.WithStderr(testlogger.New(t)))
@@ -236,16 +237,24 @@ func runAgainstServer(t *testing.T, client *rsyncclient.Client, serverArgs, path
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := srv.InternalHandleConn(t.Context(), conn, nil, pc); err != nil {
+		err := srv.InternalHandleConn(t.Context(), conn, nil, pc)
+		stdoutwr.CloseWithError(err)
+		stdinrd.CloseWithError(err)
+		if err != nil {
 			t.Errorf("InternalHandleConn: %v", err)
 		}
 	}()
 
 	rw := &readWriter{Reader: stdoutrd, Writer: stdinwr}
-	if _, err := client.Run(t.Context(), rw, paths); err != nil {
-		t.Fatalf("client.Run: %v", err)
+	_, err = client.Run(t.Context(), rw, paths)
+	if err != nil {
+		stdinwr.CloseWithError(err)
+		stdoutrd.CloseWithError(err)
 	}
 	wg.Wait()
+	if err != nil {
+		t.Fatalf("client.Run: %v", err)
+	}
 }
 
 // checkAppended fails unless path holds full, and says so when the existing
@@ -313,4 +322,60 @@ func TestAppendDownloadWithoutInplace(t *testing.T) {
 	}
 	runAgainstServer(t, client, client.ServerCommandOptions(srcPath), []string{destDir})
 	checkAppended(t, filepath.Join(destDir, "data.bin"), full)
+}
+
+// TestAppendSkipsNotShorter covers rsync/generator.c: --append leaves a
+// destination alone when it is not shorter than the source. The receiver
+// used to send block sums that no --append sender reads, so the transfer
+// stopped with a protocol error at the first such file.
+func TestAppendSkipsNotShorter(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	srcDir := filepath.Join(tmp, "src")
+	destDir := filepath.Join(tmp, "dest")
+	for _, dir := range []string{srcDir, destDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const size = 32 * 1024
+	writeRandom(t, filepath.Join(srcDir, "same.bin"), size)
+	writeRandom(t, filepath.Join(srcDir, "longer.bin"), size)
+	growing := writeRandom(t, filepath.Join(srcDir, "growing.bin"), size)
+	want := map[string][]byte{
+		"same.bin":    writeRandom(t, filepath.Join(destDir, "same.bin"), size),
+		"longer.bin":  writeRandom(t, filepath.Join(destDir, "longer.bin"), size+1024),
+		"growing.bin": growing,
+	}
+	if err := os.WriteFile(filepath.Join(destDir, "growing.bin"), growing[:appendPrefix], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// An older mtime keeps the quick check (same size and mtime) from
+	// skipping same.bin before the --append rule is reached.
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	for name := range want {
+		if err := os.Chtimes(filepath.Join(destDir, name), old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	client, err := rsyncclient.New([]string{"-rt", "--append"},
+		rsyncclient.WithSender(),
+		rsyncclient.WithStderr(testlogger.New(t)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runAgainstServer(t, client, client.ServerCommandOptions(destDir), []string{srcDir + "/"})
+
+	for name, want := range want {
+		got, err := os.ReadFile(filepath.Join(destDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("%s: %d bytes, want the expected %d", name, len(got), len(want))
+		}
+	}
 }

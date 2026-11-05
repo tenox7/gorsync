@@ -306,6 +306,16 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		return nil
 	}
 
+	// rsync/generator.c: --append only adds to files, so it leaves a
+	// destination alone when it is not shorter than the source. No --append
+	// sender would read the block sums sent below.
+	if rt.Opts.AppendMode > 0 && st.Size() >= f.Length {
+		if rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
+			rt.Logger.Printf("append: skipping %s, not shorter than the source (%d/%d bytes)", f.Name, st.Size(), f.Length)
+		}
+		return nil
+	}
+
 	if rt.Opts.DryRun {
 		if err := rt.Conn.WriteInt32(int32(idx)); err != nil {
 			return err
