@@ -1649,6 +1649,14 @@ func (pc *Context) ParseArguments(osenv *rsyncos.Env, args []string) error {
 		opts.make_backups = 1 // --backup-dir implies --backup
 	}
 
+	// rsync/options.c: --append implies --inplace, on the client and on the
+	// server alike, so a stock client sends the server only --append.
+	// Appending to a fresh temporary file would replace the existing prefix
+	// with zeros.
+	if opts.append_mode != 0 {
+		opts.inplace = 1
+	}
+
 	if opts.do_progress != 0 && opts.am_server == 0 {
 		if opts.info[INFO_NAME] == 0 {
 			opts.info[INFO_NAME] = 1

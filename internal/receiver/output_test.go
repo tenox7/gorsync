@@ -187,3 +187,32 @@ func allDigits(s string) bool {
 	}
 	return s != ""
 }
+
+func TestPendingFileAppendNeedsInplace(t *testing.T) {
+	root, dir := openRoot(t)
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("PREFIX"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A temporary file does not hold the prefix: seeking past it would leave
+	// zeros that replace the destination's data on rename.
+	p, err := newPendingFile(root, "f", outputMode{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.SeekToAppendOffset(6); err == nil {
+		t.Error("SeekToAppendOffset on a temporary file succeeded, want an error")
+	}
+	if err := p.Cleanup(); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "f"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "PREFIX" {
+		t.Errorf("dest = %q, want %q", got, "PREFIX")
+	}
+	assertNoTempFiles(t, dir)
+}

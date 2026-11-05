@@ -157,7 +157,14 @@ func (p *pendingFile) sparseWrite(buf []byte) (int, error) {
 // the prefix bytes in the written counter so a subsequent Truncate(p.written)
 // in CloseAtomicallyReplace doesn't lop off the existing prefix. Used by the
 // --append receiver path.
+//
+// Only an in-place file holds that prefix. In a temporary file the skipped
+// range reads back as zeros, and the rename would replace the destination's
+// data with them, so refuse instead (rsyncopts makes --append imply --inplace).
 func (p *pendingFile) SeekToAppendOffset(offset int64) error {
+	if !p.mode.Inplace {
+		return fmt.Errorf("append to %s needs --inplace: a temporary file would zero its first %d bytes", p.finalPath, offset)
+	}
 	if _, err := p.f.Seek(offset, io.SeekStart); err != nil {
 		return err
 	}

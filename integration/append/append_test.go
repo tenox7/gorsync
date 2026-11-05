@@ -192,3 +192,125 @@ func TestAppendGorsyncToGorsync(t *testing.T) {
 		t.Fatalf("dest after append: %d bytes, want %d", len(got), len(full))
 	}
 }
+
+const appendPrefix = 12 * 1024
+
+// appendFixture writes a 48 KiB random source file and a destination file
+// that holds its first appendPrefix bytes.
+func appendFixture(t *testing.T) (srcPath, destDir string, full []byte) {
+	t.Helper()
+	tmp := t.TempDir()
+	srcDir := filepath.Join(tmp, "src")
+	destDir = filepath.Join(tmp, "dest")
+	for _, dir := range []string{srcDir, destDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srcPath = filepath.Join(srcDir, "data.bin")
+	full = writeRandom(t, srcPath, 48*1024)
+	if err := os.WriteFile(filepath.Join(destDir, "data.bin"), full[:appendPrefix], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return srcPath, destDir, full
+}
+
+// runAgainstServer runs client against an in-process gorsync server that
+// parses serverArgs, and waits for both ends.
+func runAgainstServer(t *testing.T, client *rsyncclient.Client, serverArgs, paths []string) {
+	t.Helper()
+	srv, err := rsyncd.NewServer(nil, rsyncd.WithStderr(testlogger.New(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdinrd, stdinwr := io.Pipe()
+	stdoutrd, stdoutwr := io.Pipe()
+	conn := rsyncd.NewConnection(stdinrd, stdoutwr, "<io.Pipe>")
+	osenv := rsyncostest.New(t)
+	pc := rsyncopts.NewContext(rsyncopts.NewOptions(osenv))
+	if err := pc.ParseArguments(osenv, serverArgs); err != nil {
+		t.Fatalf("parsing server args %q: %v", serverArgs, err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := srv.InternalHandleConn(t.Context(), conn, nil, pc); err != nil {
+			t.Errorf("InternalHandleConn: %v", err)
+		}
+	}()
+
+	rw := &readWriter{Reader: stdoutrd, Writer: stdinwr}
+	if _, err := client.Run(t.Context(), rw, paths); err != nil {
+		t.Fatalf("client.Run: %v", err)
+	}
+	wg.Wait()
+}
+
+// checkAppended fails unless path holds full, and says so when the existing
+// prefix was overwritten.
+func checkAppended(t *testing.T, path string, full []byte) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) >= appendPrefix && !bytes.Equal(got[:appendPrefix], full[:appendPrefix]) {
+		t.Fatalf("the existing %d-byte prefix was overwritten (all zeros: %v)",
+			appendPrefix, bytes.Count(got[:appendPrefix], []byte{0}) == appendPrefix)
+	}
+	if !bytes.Equal(got, full) {
+		t.Fatalf("dest after append: %d bytes, want %d", len(got), len(full))
+	}
+}
+
+// TestAppendStockClientArgs gives a gorsync server the arguments a stock rsync
+// client sends for --append and --append-verify: no --inplace, because rsync's
+// options.c makes --append imply it on both ends. Appending to a temporary
+// file instead replaces the existing prefix with zeros, and the transfer still
+// succeeds: the file checksum covers the prefix as read from the old file.
+func TestAppendStockClientArgs(t *testing.T) {
+	t.Parallel()
+
+	for _, flag := range []string{"--append", "--append-verify"} {
+		t.Run(flag, func(t *testing.T) {
+			t.Parallel()
+
+			srcPath, destDir, full := appendFixture(t)
+			client, err := rsyncclient.New([]string{"-t", flag},
+				rsyncclient.WithSender(),
+				rsyncclient.WithStderr(testlogger.New(t)),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// gorsync's client also forwards --inplace; a stock client does not.
+			var serverArgs []string
+			for _, arg := range client.ServerCommandOptions(destDir) {
+				if arg != "--inplace" {
+					serverArgs = append(serverArgs, arg)
+				}
+			}
+			runAgainstServer(t, client, serverArgs, []string{srcPath})
+			checkAppended(t, filepath.Join(destDir, "data.bin"), full)
+		})
+	}
+}
+
+// TestAppendDownloadWithoutInplace is the same rule on the client side: a
+// gorsync client receiving with --append alone must write into the existing
+// file too.
+func TestAppendDownloadWithoutInplace(t *testing.T) {
+	t.Parallel()
+
+	srcPath, destDir, full := appendFixture(t)
+	client, err := rsyncclient.New([]string{"-t", "--append"},
+		rsyncclient.WithStderr(testlogger.New(t)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runAgainstServer(t, client, client.ServerCommandOptions(srcPath), []string{destDir})
+	checkAppended(t, filepath.Join(destDir, "data.bin"), full)
+}

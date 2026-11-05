@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -228,6 +229,40 @@ func TestParseArgumentsRemaining(t *testing.T) {
 			got := pc.RemainingArgs
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Errorf("RemainingArgs: unexpected diff (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestAppendImpliesInplace mirrors rsync's options.c: --append and
+// --append-verify turn on --inplace, even after --no-inplace.
+func TestAppendImpliesInplace(t *testing.T) {
+	for _, tt := range []struct {
+		args    []string
+		inplace bool
+	}{
+		{args: nil, inplace: false},
+		{args: []string{"--inplace"}, inplace: true},
+		{args: []string{"--append"}, inplace: true},
+		{args: []string{"--append-verify"}, inplace: true},
+		// How server_options spells --append-verify.
+		{args: []string{"--append", "--append"}, inplace: true},
+		{args: []string{"--append", "--no-inplace"}, inplace: true},
+		{args: []string{"--append", "--no-append"}, inplace: false},
+	} {
+		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
+			osenv := rsyncostest.New(t)
+			pc := NewContext(NewOptions(osenv))
+			if err := pc.ParseArguments(osenv, tt.args); err != nil {
+				t.Fatalf("ParseArguments: %v", err)
+			}
+			if got := pc.Options.Inplace(); got != tt.inplace {
+				t.Errorf("Inplace() = %v, want %v", got, tt.inplace)
+			}
+			// The client forwards --inplace with --append, which also keeps
+			// gorsync servers older than this rule from losing the prefix.
+			if got := slices.Contains(pc.Options.ServerOptions(), "--inplace"); got != tt.inplace {
+				t.Errorf("ServerOptions() contains --inplace = %v, want %v", got, tt.inplace)
 			}
 		})
 	}
