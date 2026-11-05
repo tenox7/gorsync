@@ -683,11 +683,14 @@ func (s *Server) authServer(rd *bufio.Reader, cwr io.Writer, module *Module, rem
 	challenge := genChallenge()
 	fmt.Fprintf(cwr, "@RSYNCD: AUTHREQD %s\n", challenge)
 
-	line, err := rd.ReadString('\n')
+	// ReadSlice like the rest of the handshake (upstream 28ec171): a response
+	// longer than the reader's buffer is rejected instead of growing memory
+	// until a newline arrives. Copy it out before the next read reuses it.
+	raw, err := rd.ReadSlice('\n')
 	if err != nil {
 		return fmt.Errorf("reading auth response: %v", err)
 	}
-	line = strings.TrimSpace(line)
+	line := strings.TrimSpace(string(raw))
 	sp := strings.IndexByte(line, ' ')
 	if sp < 0 {
 		s.logger.Printf("auth failed on module %s from %s: invalid response", module.Name, remoteAddr)
