@@ -99,8 +99,12 @@ func (st *Transfer) SendFiles(fileList *fileList) error {
 			// fast path: send the whole file
 			err = st.sendFile(fileIndex, fl)
 		case phase > 0 && st.Opts.AppendMode() > 0:
-			// phase-1 redo on an --append transfer: respond without delta
-			err = st.sendFileAppendVerify(head, fileIndex, fl)
+			// The redo pass of an --append transfer only holds files whose
+			// checksum the receiver failed in phase 0: the prefix it kept
+			// differs from ours. rsync turns append off for the redo
+			// (rsync/sender.c:send_files) and resends; send the whole file
+			// rather than trust any of the receiver's blocks.
+			err = st.sendFile(fileIndex, fl)
 		default:
 			err = st.hashSearch(targets, tagTable, head, fileIndex, fl)
 		}

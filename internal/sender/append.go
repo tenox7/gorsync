@@ -65,7 +65,8 @@ func (st *Transfer) sendFileAppend(head rsync.SumHead, fileIndex int32, fl file)
 	// (rsync/match.c:match_sums with append_mode 2, which is what every
 	// append is below protocol 30), so the receiver can check the bytes it
 	// already holds. Reading the prefix through the hash positions f at the
-	// tail; the sum doubles as the phase-1 redo sum, see sendFileAppendVerify.
+	// tail. A receiver whose prefix differs fails the file and asks for it
+	// again in the redo pass, where SendFiles sends it whole.
 	if _, err := io.CopyN(h, f, prefixSize); err != nil {
 		return err
 	}
@@ -107,9 +108,7 @@ func (st *Transfer) sendFileAppend(head rsync.SumHead, fileIndex int32, fl file)
 		return err
 	}
 
-	sum := h.Sum(nil)
-	st.appendSumPending(fileIndex) <- sum
-	if _, err := st.Conn.Writer.Write(sum); err != nil {
+	if _, err := st.Conn.Writer.Write(h.Sum(nil)); err != nil {
 		return err
 	}
 	return nil

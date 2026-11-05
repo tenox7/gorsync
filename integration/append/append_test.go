@@ -379,3 +379,71 @@ func TestAppendSkipsNotShorter(t *testing.T) {
 		}
 	}
 }
+
+// TestAppendRedoResendsChangedPrefix gives system rsync a destination whose
+// prefix differs from the source, as an older version of a file that has
+// since grown does. --append-verify makes the receiver fail the file in
+// phase 0 and ask for it again in the redo pass, where rsync turns append
+// off: the sender has to resend the whole file there, or the receiver keeps
+// the old prefix and fails the file a second time.
+func TestAppendRedoResendsChangedPrefix(t *testing.T) {
+	t.Parallel()
+
+	srcPath, destDir, full := appendFixture(t)
+	destPath := filepath.Join(destDir, "data.bin")
+	old := bytes.Clone(full[:appendPrefix])
+	old[appendPrefix/2] ^= 0xff
+	if err := os.WriteFile(destPath, old, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sendToSystemRsync(t, []string{"-t", "--inplace", "--partial", "-W", "--append-verify"}, srcPath, destDir)
+
+	got, err := os.ReadFile(destPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, full) {
+		t.Fatalf("dest after the redo pass: %d bytes, want the %d-byte source", len(got), len(full))
+	}
+}
+
+// sendToSystemRsync sends srcPath with a gorsync sender to a system rsync
+// receiver writing into destDir, and fails unless both ends report success.
+func sendToSystemRsync(t *testing.T, args []string, srcPath, destDir string) {
+	t.Helper()
+	client, err := rsyncclient.New(args,
+		rsyncclient.WithSender(),
+		rsyncclient.WithStderr(testlogger.New(t)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsync := exec.Command(rsynctest.AnyRsync(t), client.ServerCommandOptions(destDir)...)
+	stdin, err := rsync.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := rsync.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsync.Stderr = testlogger.New(t)
+	if err := rsync.Start(); err != nil {
+		t.Fatal(err)
+	}
+	res, err := client.Run(t.Context(), &readWriter{Reader: stdout, Writer: stdin}, []string{srcPath})
+	if err != nil {
+		rsync.Process.Kill()
+		rsync.Wait()
+		t.Fatalf("client.Run: %v", err)
+	}
+	_ = stdin.Close()
+	if res.XferErrors > 0 {
+		rsync.Wait()
+		t.Fatalf("the receiver failed %d file(s)", res.XferErrors)
+	}
+	if err := rsync.Wait(); err != nil {
+		t.Fatalf("rsync.Wait: %v", err)
+	}
+}
