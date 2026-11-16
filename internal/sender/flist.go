@@ -345,7 +345,11 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 
 	// If the status byte is zero, the file-list has terminated.
 
-	if info.Mode().IsDir() && !opts.Recurse() {
+	// --dirs (-d) without -r: the folder a request names with a trailing
+	// slash, or ".", goes with its own entries, one level deep; it is the
+	// only entry sent as ".". Any other folder goes as an entry only.
+	// (rsync flist.c send_file_list: SLASH_ENDING_NAME, DOTDIR_NAME.)
+	if info.Mode().IsDir() && !opts.Recurse() && name != "." {
 		return filepath.SkipDir
 	}
 
