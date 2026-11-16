@@ -125,7 +125,14 @@ func TestNoReadPermission(t *testing.T) {
 	rsync.Dir = filepath.Dir(dest)
 	rsync.Stdout = &buf
 	rsync.Stderr = &buf
-	if err := rsync.Run(); err != nil {
+	err := rsync.Run()
+	if os.Getuid() > 0 {
+		// The daemon tells the client about the file it cannot read, and
+		// rsync (openrsync too) exits 23, as with a stock daemon.
+		if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 23 {
+			t.Fatalf("%v: %v, want exit status 23\n%s", rsync.Args, err, buf.String())
+		}
+	} else if err != nil {
 		t.Fatalf("%v: %v", rsync.Args, err)
 	}
 

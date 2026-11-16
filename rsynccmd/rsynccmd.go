@@ -57,6 +57,10 @@ type Result struct {
 	// XferErrors is the number of per-file errors the peer reported (rsync
 	// exits with code 23 when it is non-zero).
 	XferErrors int
+	// IOErrors is the run's io_error flag, as in rsyncclient.Result: for a
+	// run that sends, also every file the sender left out because it could
+	// not read it (rsync exits with code 23 or 24 when it is non-zero).
+	IOErrors int
 }
 
 // Run starts the specified rsync invocation.
@@ -72,5 +76,5 @@ func (c *Cmd) Run(ctx context.Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Result{Stats: stats, XferErrors: int(osenv.XferErrors.Load())}, nil
+	return &Result{Stats: stats, XferErrors: int(osenv.XferErrors.Load()), IOErrors: int(osenv.IOErrors.Load())}, nil
 }

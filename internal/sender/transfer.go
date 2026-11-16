@@ -41,10 +41,30 @@ type Transfer struct {
 	Progress progress.Printer
 	Source   FileSource // for modules specifying a fs.FS
 
+	// TellClient, when set, sends the client a message with tag, as an rsync
+	// server tells it about a file it leaves out (rsync/sender.c
+	// send_files); the client counts the message as an error. Servers set
+	// it. Either way the run's io_error in Env records the file, which is
+	// how a client sender reports it (rsyncclient.Result.IOErrors).
+	TellClient func(tag uint8, msg string)
+
 	// state
 	Conn      *rsyncwire.Conn
 	Seed      int32
 	lastMatch int64
+}
+
+// rsync's io_error bits (rsync.h IOERR_GENERAL, IOERR_VANISHED).
+const (
+	ioErrGeneral  = 1
+	ioErrVanished = 2
+)
+
+// noteIOError adds bits to the run's io_error.
+func (st *Transfer) noteIOError(bits int32) {
+	if st.Env != nil {
+		st.Env.IOErrors.Or(bits)
+	}
 }
 
 //func (rt *Transfer) listOnly() bool { return rt.Dest == "" }

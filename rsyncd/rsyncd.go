@@ -415,7 +415,7 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 			}
 		}()
 
-		return s.handleConnSender(module, crd, cwr, paths, opts, false, c, sessionChecksumSeed)
+		return s.handleConnSender(module, crd, cwr, paths, opts, false, c, sessionChecksumSeed, mpx)
 	}
 
 	// If returning an error, send the error to the client for display, too:
@@ -575,7 +575,7 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 }
 
 // handleConnSender is equivalent to rsync/main.c:do_server_sender
-func (s *Server) handleConnSender(module *Module, crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWriter, paths []string, opts *rsyncopts.Options, negotiate bool, c *rsyncwire.Conn, sessionChecksumSeed int32) (err error) {
+func (s *Server) handleConnSender(module *Module, crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWriter, paths []string, opts *rsyncopts.Options, negotiate bool, c *rsyncwire.Conn, sessionChecksumSeed int32, mpx *rsyncwire.MultiplexWriter) (err error) {
 	if module == nil {
 		module = &Module{
 			Name: "implicit",
@@ -592,6 +592,9 @@ func (s *Server) handleConnSender(module *Module, crd *rsyncwire.CountingReader,
 			Stderr: s.stderr,
 		},
 		Progress: progress.NewPrinter(io.Discard, time.Now),
+		TellClient: func(tag uint8, msg string) {
+			mpx.WriteMsg(tag, []byte(msg))
+		},
 	}
 	// receive the exclusion list (openrsync’s is always empty)
 

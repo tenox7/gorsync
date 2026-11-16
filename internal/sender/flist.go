@@ -382,6 +382,7 @@ func (st *Transfer) SendFileList(localDir string, paths []string, excl *filterRu
 			st.Logger.Printf("lstat: %v", err)
 		}
 		ioErrors = 1
+		st.noteIOError(ioErrGeneral)
 	}
 
 	for _, requested := range paths {

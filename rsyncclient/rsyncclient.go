@@ -150,7 +150,10 @@ type Result struct {
 	// the sender could not read something and left it out of the list, bit
 	// 2 that a file vanished while it listed. Check it before trusting a
 	// file list as complete: a sender may set it without sending an error
-	// message, so XferErrors stays 0.
+	// message, so XferErrors stays 0. When this side sends, it is this
+	// side's own flag, and also counts the files it listed but could not
+	// send: bit 1 for one it could not read, bit 2 for one that vanished
+	// (rsync/sender.c send_files; rsync exits with code 23 or 24).
 	IOErrors int
 }
 

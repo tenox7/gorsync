@@ -29,7 +29,8 @@ type Env struct {
 	// something and left it out of the list, bit 2 (IOERR_VANISHED) when a
 	// file vanished while it listed. rsync skips deletes on bit 1. A sender
 	// may set the flag without sending any error message (gorsync's own
-	// sender does), so XferErrors alone can miss a short file list.
+	// sender does), so XferErrors alone can miss a short file list. When
+	// this side sends, its sender adds the bits for what it leaves out.
 	IOErrors atomic.Int32
 
 	logger log.Logger

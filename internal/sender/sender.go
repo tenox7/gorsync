@@ -2,6 +2,7 @@ package sender
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/gokrazy/rsync/internal/rsyncchecksum"
 	"github.com/gokrazy/rsync/internal/rsynccommon"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
+	"github.com/gokrazy/rsync/internal/rsyncwire"
 	"github.com/mmcloughlin/md4"
 	"golang.org/x/sync/errgroup"
 )
@@ -110,13 +112,20 @@ func (st *Transfer) SendFiles(fileList *fileList) error {
 		}
 		if err != nil {
 			if _, ok := err.(*os.PathError); ok {
-				// OpenFile() failed. Log the error (server side only) and
-				// proceed. Only starting with protocol 30, an I/O error flag is
+				// OpenFile() failed. Like rsync, leave the file out, count
+				// it in the run's io_error and go on; a server tells the
+				// client, which fails the run (rsync/sender.c send_files).
+				// Only starting with protocol 30, an I/O error flag is
 				// sent after the file transfer phase.
 				if os.IsNotExist(err) {
 					st.Logger.Printf("file has vanished: %s", fl.path)
+					st.noteIOError(ioErrVanished)
+					// A daemon below protocol 28 sends this as an error.
+					st.tellClient(rsyncwire.MsgError, fmt.Sprintf("file has vanished: \"%s\"\n", fl.Wpath))
 				} else {
 					st.Logger.Printf("sendFiles: %v", err)
+					st.noteIOError(ioErrGeneral)
+					st.tellClient(rsyncwire.MsgErrorXfer, fmt.Sprintf("rsync: send_files failed to open \"%s\": %v\n", fl.Wpath, errors.Unwrap(err)))
 				}
 				continue
 			} else {
@@ -286,4 +295,10 @@ func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 		return err
 	}
 	return nil
+}
+
+func (st *Transfer) tellClient(tag uint8, msg string) {
+	if st.TellClient != nil {
+		st.TellClient(tag, msg)
+	}
 }
