@@ -254,7 +254,8 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 		if err != nil {
 			return err
 		}
-		flag := strings.TrimSpace(string(line))
+		// Only the line end goes: a path may start or end with a space.
+		flag := strings.TrimRight(string(line), "\r\n")
 		s.logger.Printf("client sent: %q", flag)
 		if flag == "" {
 			break
@@ -303,21 +304,14 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 	paths := remaining[1:]
 	s.logger.Printf("paths: %q", paths)
 
-	// Strip the module_name/ prefix out of the paths,
-	// see rsync/io.c:read_args, glob_expand_module().
-	for idx, path := range pc.RemainingArgs {
-		if idx == 0 {
-			// skip pc.RemainingArgs[0], only strip RemainingArgs[1:]
-			continue
-		}
-		trimmed := strings.TrimPrefix(path, module.Name)
-		if trimmed == "" {
-			trimmed = "."
-		}
-		pc.RemainingArgs[idx] = trimmed
-	}
+	// Strip the module_name/ prefix out of the paths and expand them as
+	// rsync does, see expandArgs.
+	fsys, closeFS := moduleArgFS(&module)
+	expanded := expandArgs(fsys, module.Name, pc.RemainingArgs[1:])
+	closeFS()
+	pc.RemainingArgs = append(pc.RemainingArgs[:1:1], expanded...)
 
-	s.logger.Printf("trimmed paths: %q", pc.RemainingArgs[1:])
+	s.logger.Printf("expanded paths: %q", pc.RemainingArgs[1:])
 
 	return s.handleConn(ctx, conn, &module, pc, false)
 }
