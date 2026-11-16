@@ -133,3 +133,56 @@ func TestSenderCountsWhatItLeavesOut(t *testing.T) {
 		t.Errorf("rsynccmd push with secret.txt unreadable: IOErrors = %d, want bit 1", res.IOErrors)
 	}
 }
+
+// A client that receives with --delete counts a path it could not delete in
+// Result.XferErrors, as rsync exits 23 for it (rsync/delete.c delete_item).
+// gorsync only logged it.
+func TestReceiverCountsWhatItCannotDelete(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root deletes everything")
+	}
+	src, dest := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "ro"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ro := filepath.Join(dest, "ro")
+	if err := os.MkdirAll(ro, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ro, "extra.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(ro, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(ro, 0o755) })
+
+	client, err := rsyncclient.New([]string{"-r", "--delete"}, rsyncclient.WithStdout(io.Discard), rsyncclient.WithStderr(testlogger.New(t)), rsyncclient.DontRestrict())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(rsynctest.TridgeOrGTFO(t, "stock rsync sends"), client.ServerCommandOptions(".")...)
+	cmd.Dir = src
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	res, err := client.Run(t.Context(), &rsync.BothCloser{ReadCloser: stdout, WriteCloser: stdin}, []string{dest + "/"})
+	cmd.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(ro, "extra.txt")); err != nil {
+		t.Fatalf("extra.txt is gone; the test needs a delete that fails: %v", err)
+	}
+	if res.XferErrors == 0 {
+		t.Errorf("--delete of ro/extra.txt in a read-only folder failed, but XferErrors = 0")
+	}
+}

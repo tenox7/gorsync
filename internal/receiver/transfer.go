@@ -81,6 +81,12 @@ type Transfer struct {
 	// client-supplied filter list. Consulted only when DeleteMode is on.
 	Excluded func(name string) bool
 
+	// TellClient, when set, sends the client a message with tag, as an rsync
+	// server tells it about a file it could not delete (rsync/delete.c
+	// delete_item); the client counts the message as an error. Servers set
+	// it; a client counts the error in Env.XferErrors instead.
+	TellClient func(tag uint8, msg string)
+
 	// state
 	Conn         *rsyncwire.Conn
 	Seed         int32

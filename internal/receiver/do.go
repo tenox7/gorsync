@@ -1,6 +1,8 @@
 package receiver
 
 import (
+	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"sync"
@@ -58,7 +60,9 @@ func (rt *Transfer) deleteFiles(fileList []*File) error {
 			}
 			if err := rt.DestRoot.RemoveAll(path); err != nil {
 				rt.Logger.Printf("  deleting %s failed: %v", path, err)
-				// keep going
+				// Keep going, as rsync does; the error fails the run
+				// (rsync/delete.c delete_item, FERROR_XFER).
+				rt.deleteFailed(path, err)
 			}
 			if info.IsDir() {
 				return fs.SkipDir // skip the just-deleted directory
@@ -73,6 +77,18 @@ func (rt *Transfer) deleteFiles(fileList []*File) error {
 		}
 	}
 	return nil
+}
+
+// deleteFailed reports a path that --delete could not remove: a server
+// tells the client, a client counts it.
+func (rt *Transfer) deleteFailed(path string, err error) {
+	if rt.TellClient != nil {
+		rt.TellClient(rsyncwire.MsgErrorXfer, fmt.Sprintf("rsync: delete_file: remove \"%s\" failed: %v\n", path, errors.Unwrap(err)))
+		return
+	}
+	if rt.Env != nil {
+		rt.Env.XferErrors.Add(1)
+	}
 }
 
 // rsync/main.c:do_recv

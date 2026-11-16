@@ -55,8 +55,14 @@ func makeGlobTree(t *testing.T) string {
 	return dir
 }
 
-// startStockDaemon runs stock rsync as a daemon serving dir as module mod.
+// startStockDaemon runs stock rsync as a daemon serving dir as the
+// read-only module mod.
 func startStockDaemon(t *testing.T, dir string) string {
+	t.Helper()
+	return startStockDaemonModule(t, dir, true)
+}
+
+func startStockDaemonModule(t *testing.T, dir string, readOnly bool) string {
 	t.Helper()
 	bin := rsynctest.TridgeOrGTFO(t, "compares with the stock daemon")
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -67,7 +73,7 @@ func startStockDaemon(t *testing.T, dir string) string {
 	_, port, _ := net.SplitHostPort(addr)
 	l.Close()
 	conf := filepath.Join(t.TempDir(), "rsyncd.conf")
-	cfg := fmt.Sprintf("use chroot = no\nport = %s\n[mod]\n  path = %s\n  read only = yes\n", port, dir)
+	cfg := fmt.Sprintf("use chroot = no\nport = %s\n[mod]\n  path = %s\n  read only = %v\n", port, dir, readOnly)
 	if err := os.WriteFile(conf, []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}

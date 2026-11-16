@@ -21,7 +21,8 @@ type Env struct {
 	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
 
 	// XferErrors counts the MSG_ERROR_XFER and MSG_ERROR messages the peer
-	// sent; rsync itself turns any of them into exit code 23.
+	// sent, and the paths this side's receiver could not delete; rsync
+	// itself turns any of them into exit code 23.
 	XferErrors atomic.Int32
 
 	// IOErrors is the io_error flag the sender sends after the file list

@@ -424,11 +424,11 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 			mpx.WriteMsg(rsyncwire.MsgErrorXfer, fmt.Appendf(nil, "gokr-rsync [receiver]: %v\n", err))
 		}
 	}()
-	return s.handleConnReceiver(module, crd, cwr, paths, opts, false, c, sessionChecksumSeed)
+	return s.handleConnReceiver(module, crd, cwr, paths, opts, false, c, sessionChecksumSeed, mpx)
 }
 
 // handleConnReceiver is equivalent to rsync/main.c:do_server_recv
-func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWriter, paths []string, opts *rsyncopts.Options, negotiate bool, c *rsyncwire.Conn, sessionChecksumSeed int32) (err error) {
+func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWriter, paths []string, opts *rsyncopts.Options, negotiate bool, c *rsyncwire.Conn, sessionChecksumSeed int32, mpx *rsyncwire.MultiplexWriter) (err error) {
 	var destPath string
 	implicitModule := module == nil
 	if implicitModule {
@@ -491,6 +491,9 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 		Conn:     c,
 		Seed:     sessionChecksumSeed,
 		Progress: progress.NewPrinter(io.Discard, time.Now),
+		TellClient: func(tag uint8, msg string) {
+			mpx.WriteMsg(tag, []byte(msg))
+		},
 	}
 	if err := os.MkdirAll(rt.Dest, 0755); err != nil {
 		return fmt.Errorf("MkdirAll(dest=%s): %v", rt.Dest, err)
