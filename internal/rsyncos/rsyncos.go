@@ -24,6 +24,14 @@ type Env struct {
 	// sent; rsync itself turns any of them into exit code 23.
 	XferErrors atomic.Int32
 
+	// IOErrors is the io_error flag the sender sends after the file list
+	// (protocol < 30): bit 1 (IOERR_GENERAL) when it could not read
+	// something and left it out of the list, bit 2 (IOERR_VANISHED) when a
+	// file vanished while it listed. rsync skips deletes on bit 1. A sender
+	// may set the flag without sending any error message (gorsync's own
+	// sender does), so XferErrors alone can miss a short file list.
+	IOErrors atomic.Int32
+
 	logger log.Logger
 }
 

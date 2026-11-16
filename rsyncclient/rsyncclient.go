@@ -146,6 +146,12 @@ type Result struct {
 	// XferErrors is the number of per-file errors the peer reported during
 	// the run (rsync exits with code 23 when it is non-zero).
 	XferErrors int
+	// IOErrors is the io_error flag that ended the file list: bit 1 means
+	// the sender could not read something and left it out of the list, bit
+	// 2 that a file vanished while it listed. Check it before trusting a
+	// file list as complete: a sender may set it without sending an error
+	// message, so XferErrors stays 0.
+	IOErrors int
 }
 
 // Run starts one run of the rsync protocol (not the rsync daemon protocol), see
@@ -170,11 +176,12 @@ type Result struct {
 // Canceling ctx closes conn, which aborts the transfer.
 func (c *Client) Run(ctx context.Context, conn io.ReadWriteCloser, paths []string) (*Result, error) {
 	c.osenv.XferErrors.Store(0)
+	c.osenv.IOErrors.Store(0)
 	stats, fileList, err := maincmd.ClientRun(ctx, c.osenv, c.opts, conn, paths, c.negotiate, maincmd.ClientHooks{OnFile: c.onFile, UnverifiedAppend: c.unverifiedAppend})
 	if err != nil {
 		return nil, err
 	}
-	return &Result{Stats: stats, FileList: fileList, XferErrors: int(c.osenv.XferErrors.Load())}, nil
+	return &Result{Stats: stats, FileList: fileList, XferErrors: int(c.osenv.XferErrors.Load()), IOErrors: int(c.osenv.IOErrors.Load())}, nil
 }
 
 // RunDaemon starts one run of the rsync daemon protocol, meaning it performs

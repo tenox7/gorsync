@@ -271,6 +271,9 @@ func (rt *Transfer) ReceiveFileList() ([]*File, error) {
 		rt.Logger.Printf("ioErrors: %v", ioErrors)
 	}
 	rt.IOErrors = ioErrors
+	if rt.Env != nil {
+		rt.Env.IOErrors.Store(ioErrors)
+	}
 
 	return fileList, nil
 }
