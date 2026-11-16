@@ -1,6 +1,7 @@
 package sender
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -127,7 +128,26 @@ func (s *scopedWalker) walk() error {
 	if strings.HasPrefix(rootname, "/") {
 		rootname = "." + rootname
 	}
-	if err := fs.WalkDir(s.source.FS(), path.Clean(rootname), s.walkFn); err != nil {
+	root := path.Clean(rootname)
+	if s.strip == "" && root != "." {
+		// The requested path names one entry, not a folder's contents.
+		// rsync looks at it with link_stat (lstat, flist.c
+		// send_file_name): with -l a symbolic link there is sent as the
+		// link, where fs.WalkDir stats its root and follows it. A path
+		// that is not there is told to the client, as rsync does, not
+		// only counted in io_error: the client could not tell "not
+		// there" from "could not read".
+		info, err := fs.Lstat(s.source.FS(), root)
+		if err != nil {
+			s.st.tellClient(rsyncwire.MsgErrorXfer, fmt.Sprintf("rsync: link_stat \"%s\" failed: %v\n", path.Join(s.subdir, root), errors.Unwrap(err)))
+			s.ioError(err)
+			return nil
+		}
+		if info.Mode()&fs.ModeSymlink != 0 && s.st.Opts.PreserveLinks() {
+			return s.walkFn(root, fs.FileInfoToDirEntry(info), nil)
+		}
+	}
+	if err := fs.WalkDir(s.source.FS(), root, s.walkFn); err != nil {
 		return err
 	}
 	return nil
