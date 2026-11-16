@@ -104,8 +104,10 @@ func (rt *Transfer) setPerms(f *File, perm fs.FileMode) error {
 	}
 
 	isLink := f.Mode&rsync.S_IFMT == rsync.S_IFLNK
+	isDir := f.Mode&rsync.S_IFMT == rsync.S_IFDIR
 	if rt.Opts.PreserveTimes &&
 		!isLink &&
+		!(isDir && rt.Opts.OmitDirTimes) &&
 		!modTimeEqual(st.ModTime(), f.ModTime) {
 		if err := rt.DestRoot.Chtimes(f.Name, f.ModTime, f.ModTime); err != nil {
 			return err

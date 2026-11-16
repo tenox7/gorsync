@@ -31,6 +31,10 @@ type TransferOpts struct {
 	AlwaysChecksum    bool
 	WholeFile         bool
 
+	// OmitDirTimes leaves the times of folders alone (--omit-dir-times),
+	// with PreserveTimes too.
+	OmitDirTimes bool
+
 	Inplace     bool
 	KeepPartial bool
 	PartialDir  string

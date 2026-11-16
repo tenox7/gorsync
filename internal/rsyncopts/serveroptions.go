@@ -94,6 +94,10 @@ func (o *Options) ServerOptions() []string {
 	if o.xfer_dirs > 0 && !o.Recurse() {
 		argstr += "d"
 	}
+	// Only a receiving server sets times, so only it gets -O.
+	if o.Sender() && o.OmitDirTimes() {
+		argstr += "O"
+	}
 
 	// argstr[x] = 0;
 

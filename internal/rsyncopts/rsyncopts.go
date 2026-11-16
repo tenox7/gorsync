@@ -723,6 +723,7 @@ func (o *Options) PreserveUid() bool       { return o.preserve_uid != 0 }
 func (o *Options) PreserveGid() bool       { return o.preserve_gid != 0 }
 func (o *Options) PreserveDevices() bool   { return o.preserve_devices != 0 }
 func (o *Options) PreserveMTimes() bool    { return o.preserve_mtimes != 0 }
+func (o *Options) OmitDirTimes() bool      { return o.omit_dir_times > 0 }
 func (o *Options) PreservePerms() bool     { return o.preserve_perms != 0 }
 func (o *Options) PreserveSpecials() bool  { return o.preserve_specials != 0 }
 func (o *Options) PreserveHardLinks() bool { return o.preserve_hard_links != 0 }
@@ -877,9 +878,9 @@ func (o *Options) gokrazyTable() []poptOption {
 		//{"crtimes", "N", POPT_ARG_NONE, &o.preserve_crtimes, 1}, // refused
 		//{"no-crtimes", "", POPT_ARG_VAL, &o.preserve_crtimes, 0},
 		//{"no-N", "", POPT_ARG_VAL, &o.preserve_crtimes, 0},
-		//{"omit-dir-times", "O", POPT_ARG_VAL, &o.omit_dir_times, 1},
-		//{"no-omit-dir-times", "", POPT_ARG_VAL, &o.omit_dir_times, 0},
-		//{"no-O", "", POPT_ARG_VAL, &o.omit_dir_times, 0},
+		{"omit-dir-times", "O", POPT_ARG_VAL, &o.omit_dir_times, 1},
+		{"no-omit-dir-times", "", POPT_ARG_VAL, &o.omit_dir_times, 0},
+		{"no-O", "", POPT_ARG_VAL, &o.omit_dir_times, 0},
 		//{"omit-link-times", "J", POPT_ARG_VAL, &o.omit_link_times, 1},
 		//{"no-omit-link-times", "", POPT_ARG_VAL, &o.omit_link_times, 0},
 		//{"no-J", "", POPT_ARG_VAL, &o.omit_link_times, 0},

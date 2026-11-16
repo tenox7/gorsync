@@ -267,3 +267,36 @@ func TestAppendImpliesInplace(t *testing.T) {
 		})
 	}
 }
+
+// -O reaches the server only when the server receives, as
+// rsync/options.c:server_options sends it; both option tables take it.
+func TestOmitDirTimesServerOptions(t *testing.T) {
+	for _, gokrazy := range []bool{false, true} {
+		for _, sender := range []bool{false, true} {
+			osenv := rsyncostest.New(t)
+			opts := NewOptions(osenv)
+			if gokrazy {
+				opts = NewOptionsWithGokrazyDefaults(osenv)
+			}
+			pc := NewContext(opts)
+			if err := pc.ParseArguments(osenv, []string{"-r", "-t", "-O"}); err != nil {
+				t.Fatalf("gokrazy=%v: ParseArguments(-O): %v", gokrazy, err)
+			}
+			if !pc.Options.OmitDirTimes() {
+				t.Errorf("gokrazy=%v: OmitDirTimes() = false after -O", gokrazy)
+			}
+			if sender {
+				pc.Options.SetSender()
+			}
+			var flags string
+			for _, a := range pc.Options.ServerOptions() {
+				if strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") {
+					flags += a
+				}
+			}
+			if got := strings.Contains(flags, "O"); got != sender {
+				t.Errorf("gokrazy=%v sender=%v: ServerOptions() %q holds O = %v, want %v", gokrazy, sender, pc.Options.ServerOptions(), got, sender)
+			}
+		}
+	}
+}
