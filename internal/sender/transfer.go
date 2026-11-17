@@ -48,6 +48,11 @@ type Transfer struct {
 	// how a client sender reports it (rsyncclient.Result.IOErrors).
 	TellClient func(tag uint8, msg string)
 
+	// Only, when not nil, is all the sender sends: these paths, named as in
+	// the file list, and the folders above them, as rsync's --files-from.
+	// A listed path that is not there sets io_error.
+	Only []string
+
 	// state
 	Conn      *rsyncwire.Conn
 	Seed      int32

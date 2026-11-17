@@ -94,6 +94,19 @@ func WithUnverifiedAppend() Option {
 	})
 }
 
+// WithSendOnly makes a sending client send these paths alone, and the
+// folders above them, as rsync's --files-from does. Paths are named as in
+// the file list: relative to the folder whose contents a path ending in /
+// sends. A listed folder goes without what it holds, unless that is listed
+// too. A listed path that is not there is counted in Result.IOErrors (bit
+// 1), as rsync exits 23 for it. A nil list sends everything; it has no
+// effect without [WithSender].
+func WithSendOnly(paths []string) Option {
+	return clientOptionFunc(func(c *Client) {
+		c.sendOnly = paths
+	})
+}
+
 type Client struct {
 	osenv            *rsyncos.Env
 	opts             *rsyncopts.Options
@@ -101,6 +114,7 @@ type Client struct {
 	sender           bool
 	onFile           func(rsync.FileInfo)
 	unverifiedAppend bool
+	sendOnly         []string
 }
 
 // New creates a new [Client]. You can call [Client.Run] one or more times with
@@ -180,7 +194,7 @@ type Result struct {
 func (c *Client) Run(ctx context.Context, conn io.ReadWriteCloser, paths []string) (*Result, error) {
 	c.osenv.XferErrors.Store(0)
 	c.osenv.IOErrors.Store(0)
-	stats, fileList, err := maincmd.ClientRun(ctx, c.osenv, c.opts, conn, paths, c.negotiate, maincmd.ClientHooks{OnFile: c.onFile, UnverifiedAppend: c.unverifiedAppend})
+	stats, fileList, err := maincmd.ClientRun(ctx, c.osenv, c.opts, conn, paths, c.negotiate, maincmd.ClientHooks{OnFile: c.onFile, UnverifiedAppend: c.unverifiedAppend, SendOnly: c.sendOnly})
 	if err != nil {
 		return nil, err
 	}

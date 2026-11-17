@@ -92,6 +92,7 @@ type scopedWalker struct {
 	strip     string
 	subdir    string
 	prefix    string
+	only      *onlySet // nil: everything goes
 }
 
 func (s *scopedWalker) walk() error {
@@ -203,6 +204,13 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		flags |= rsync.XMIT_TOP_DIR
 	}
 	// st.logger.Printf("flags for %q: %v", name, flags)
+
+	if send, prune := s.only.allows(name, info.Mode().IsDir()); !send {
+		if prune {
+			return filepath.SkipDir
+		}
+		return nil // SkipDir on a file would skip the rest of its folder
+	}
 
 	if s.excl.matches(name) {
 		return filepath.SkipDir
@@ -394,6 +402,7 @@ func (st *Transfer) SendFileList(localDir string, paths []string, excl *filterRu
 		st.Logger.Printf("sendFileList()")
 	}
 	ioErrors := int32(0)
+	only := newOnlySet(st.Only)
 
 	ioError := func(err error) {
 		if os.IsNotExist(err) {
@@ -452,10 +461,18 @@ func (st *Transfer) SendFileList(localDir string, paths []string, excl *filterRu
 			strip:     strip,
 			subdir:    subdir,
 			prefix:    prefix,
+			only:      only,
 		}
 		if err := sw.walk(); err != nil {
 			return nil, err
 		}
+	}
+	// A listed path no walk came to is not there. rsync's --files-from
+	// says so (link_stat failed) and sets io_error: the run must not look
+	// complete.
+	for _, name := range only.missing() {
+		st.tellClient(rsyncwire.MsgErrorXfer, fmt.Sprintf("rsync: link_stat \"%s\" failed: %v\n", name, fs.ErrNotExist))
+		ioError(&fs.PathError{Op: "lstat", Path: name, Err: fs.ErrNotExist})
 	}
 
 	if st.Opts.InfoGTE(rsyncopts.INFO_PROGRESS, 1) {

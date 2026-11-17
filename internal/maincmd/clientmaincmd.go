@@ -283,12 +283,14 @@ func fileCallback(onFile func(rsync.FileInfo)) func(*receiver.File) {
 	return func(f *receiver.File) { onFile(fileInfo(f)) }
 }
 
-// ClientHooks are receiver behaviours a caller opts into beyond the rsync
-// options: OnFile sees each file list entry as it is received, and
-// UnverifiedAppend accepts an appended tail without the file sum check.
+// ClientHooks are behaviours a caller opts into beyond the rsync options:
+// OnFile sees each file list entry as it is received, UnverifiedAppend
+// accepts an appended tail without the file sum check, and SendOnly, when
+// not nil, limits a sending client to these paths (sender.Transfer.Only).
 type ClientHooks struct {
 	OnFile           func(rsync.FileInfo)
 	UnverifiedAppend bool
+	SendOnly         []string
 }
 
 // rsync/main.c:client_run
@@ -349,6 +351,7 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 			Seed:     seed,
 			Env:      osenv,
 			Progress: progress.NewPrinter(osenv.Stdout, time.Now),
+			Only:     hooks.SendOnly,
 		}
 		if opts.Verbose() {
 			osenv.Logf("sender(paths=%q)", paths)
