@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"sync/atomic"
 
 	"github.com/gokrazy/rsync"
 	"github.com/gokrazy/rsync/internal/rsyncchecksum"
@@ -230,6 +231,12 @@ func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 	// We calculate the hash by opening the same file again and reading
 	// independently. This keeps the hot loop below focused on shoveling data
 	// into the network socket as quickly as possible.
+	//
+	// A send that fails stops the hash at its next read. It would read the
+	// rest of the file for nothing: each try of a send over a link that
+	// keeps dying read the whole source once more, beside the next try.
+	var stop atomic.Bool
+	defer stop.Store(true)
 	var eg errgroup.Group
 	eg.Go(func() error {
 		f, err := fl.source.Open(fl.path)
@@ -239,9 +246,10 @@ func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 		defer f.Close()
 		buf := readBufs.Get().(*[readBufSize]byte)
 		defer readBufs.Put(buf)
-		// Hide WriteTo: *os.File has one, so CopyBuffer would ignore buf
-		// and allocate a 32 KiB buffer of its own for every file.
-		if _, err := io.CopyBuffer(h, struct{ io.Reader }{f}, buf[:]); err != nil {
+		// stopReader also hides WriteTo: *os.File has one, so CopyBuffer
+		// would ignore buf and allocate a 32 KiB buffer of its own for
+		// every file.
+		if _, err := io.CopyBuffer(h, stopReader{f, &stop}, buf[:]); err != nil {
 			return err
 		}
 		return nil
@@ -295,6 +303,22 @@ func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 		return err
 	}
 	return nil
+}
+
+// errSendStopped ends the hash of a file whose send failed.
+var errSendStopped = errors.New("the send of this file stopped")
+
+// stopReader reads r until stop is set, then fails.
+type stopReader struct {
+	r    io.Reader
+	stop *atomic.Bool
+}
+
+func (s stopReader) Read(p []byte) (int, error) {
+	if s.stop.Load() {
+		return 0, errSendStopped
+	}
+	return s.r.Read(p)
 }
 
 func (st *Transfer) tellClient(tag uint8, msg string) {
