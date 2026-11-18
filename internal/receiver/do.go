@@ -7,6 +7,7 @@ import (
 	"os"
 	"sync"
 
+	"github.com/gokrazy/rsync/internal/panicerr"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
 	"github.com/gokrazy/rsync/internal/rsyncstats"
 	"github.com/gokrazy/rsync/internal/rsyncwire"
@@ -111,8 +112,11 @@ func (rt *Transfer) Do(c *rsyncwire.Conn, fileList []*File, noReport bool) (*rsy
 		}
 		return err
 	}
-	eg.Go(func() error { return closeOnErr(rt.GenerateFiles(fileList)) })
-	eg.Go(func() error { return closeOnErr(rt.RecvFiles(fileList)) })
+	// Wait passes on no panic of these goroutines: a panic would end the
+	// program. Each one returns its own as an error, which closes the
+	// connection too.
+	eg.Go(func() error { return closeOnErr(panicerr.Call(func() error { return rt.GenerateFiles(fileList) })) })
+	eg.Go(func() error { return closeOnErr(panicerr.Call(func() error { return rt.RecvFiles(fileList) })) })
 	if err := eg.Wait(); err != nil {
 		return nil, err
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/gokrazy/rsync"
 	"github.com/gokrazy/rsync/internal/maincmd"
+	"github.com/gokrazy/rsync/internal/panicerr"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
 	"github.com/gokrazy/rsync/internal/rsyncos"
 	"github.com/gokrazy/rsync/internal/rsyncstats"
@@ -204,7 +205,11 @@ type Result struct {
 // [io.ReadWriteCloser] connections between client and server.
 //
 // Canceling ctx closes conn, which aborts the transfer.
-func (c *Client) Run(ctx context.Context, conn io.ReadWriteCloser, paths []string) (*Result, error) {
+//
+// A panic in the run, in this package or in a callback given to it, is
+// returned as an error: it fails this run, not the program.
+func (c *Client) Run(ctx context.Context, conn io.ReadWriteCloser, paths []string) (_ *Result, err error) {
+	defer panicerr.Recover(&err)
 	c.osenv.XferErrors.Store(0)
 	c.osenv.IOErrors.Store(0)
 	stats, fileList, err := maincmd.ClientRun(ctx, c.osenv, c.opts, conn, paths, c.negotiate, maincmd.ClientHooks{OnFile: c.onFile, UnverifiedAppend: c.unverifiedAppend, SendOnly: c.sendOnly, OnSend: c.onSend})
@@ -223,7 +228,8 @@ func (c *Client) Run(ctx context.Context, conn io.ReadWriteCloser, paths []strin
 // package.
 //
 // Canceling ctx closes conn, which aborts the transfer.
-func (c *Client) RunDaemon(ctx context.Context, conn io.ReadWriteCloser, remotePath string, paths []string) (*Result, error) {
+func (c *Client) RunDaemon(ctx context.Context, conn io.ReadWriteCloser, remotePath string, paths []string) (_ *Result, err error) {
+	defer panicerr.Recover(&err)
 	done, err := maincmd.StartInbandExchange(ctx, c.osenv, c.opts, conn, remotePath)
 	if err != nil {
 		return nil, err

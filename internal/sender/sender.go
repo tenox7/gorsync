@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"github.com/gokrazy/rsync"
+	"github.com/gokrazy/rsync/internal/panicerr"
 	"github.com/gokrazy/rsync/internal/rsyncchecksum"
 	"github.com/gokrazy/rsync/internal/rsynccommon"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
@@ -248,7 +249,8 @@ func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 	var stop atomic.Bool
 	defer stop.Store(true)
 	var eg errgroup.Group
-	eg.Go(func() error {
+	eg.Go(func() (err error) {
+		defer panicerr.Recover(&err) // Wait passes on no panic
 		f, err := fl.source.Open(fl.path)
 		if err != nil {
 			return err
