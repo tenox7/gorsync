@@ -291,6 +291,7 @@ type ClientHooks struct {
 	OnFile           func(rsync.FileInfo)
 	UnverifiedAppend bool
 	SendOnly         []string
+	OnSend           func(name string)
 }
 
 // rsync/main.c:client_run
@@ -352,6 +353,7 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 			Env:      osenv,
 			Progress: progress.NewPrinter(osenv.Stdout, time.Now),
 			Only:     hooks.SendOnly,
+			OnSend:   hooks.OnSend,
 		}
 		if opts.Verbose() {
 			osenv.Logf("sender(paths=%q)", paths)

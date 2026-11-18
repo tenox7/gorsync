@@ -32,6 +32,7 @@ func (st *Transfer) SendFiles(fileList *fileList) error {
 		if fileIndex == -1 {
 			if phase == 0 {
 				phase++
+				st.redo = true
 				// acknowledge phase change by sending -1
 				if err := st.Conn.WriteInt32(-1); err != nil {
 					return err
@@ -194,6 +195,19 @@ func (st *Transfer) receiveSumsForPhase(appendShortcut bool) (rsync.SumHead, err
 	return head, nil
 }
 
+// begin tells of a file the sender opened to send: its path on stdout, with
+// --progress, and its name to OnSend.
+func (st *Transfer) begin(fl file) {
+	if !st.Opts.Server() &&
+		st.Opts.InfoGTE(rsyncopts.INFO_NAME, 1) &&
+		st.Opts.InfoGTE(rsyncopts.INFO_PROGRESS, 1) {
+		fmt.Fprintln(st.Env.Stdout, fl.path)
+	}
+	if st.OnSend != nil && !st.redo {
+		st.OnSend(fl.Wpath)
+	}
+}
+
 func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 	f, err := fl.source.Open(fl.path)
 	if err != nil {
@@ -215,11 +229,7 @@ func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 		return err
 	}
 
-	if !st.Opts.Server() &&
-		st.Opts.InfoGTE(rsyncopts.INFO_NAME, 1) &&
-		st.Opts.InfoGTE(rsyncopts.INFO_PROGRESS, 1) {
-		fmt.Fprintln(st.Env.Stdout, fl.path)
-	}
+	st.begin(fl)
 
 	h := md4.New()
 	binary.Write(h, binary.LittleEndian, st.Seed)

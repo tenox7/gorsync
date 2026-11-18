@@ -53,7 +53,15 @@ type Transfer struct {
 	// A listed path that is not there sets io_error.
 	Only []string
 
+	// OnSend, when set, is called with each file's name, as in the file
+	// list, as the sender begins to send it: once per file, so not again
+	// for a file the redo pass sends again. A client counts the files it
+	// sends with it, instead of reading its --progress output, where a file
+	// sent within a second has a progress line with no \r to mark it.
+	OnSend func(name string)
+
 	// state
+	redo      bool // in the redo pass: OnSend told of its files already
 	Conn      *rsyncwire.Conn
 	Seed      int32
 	lastMatch int64

@@ -94,6 +94,18 @@ func WithUnverifiedAppend() Option {
 	})
 }
 
+// WithSendCallback calls fn with the name of each file a sending client
+// begins to send, as in the file list, once per file. It runs on the Run
+// goroutine. A caller counts the files of a send with it; the --progress
+// output is for people, and a file sent within a second has a progress
+// line with no \r to tell it from a name. It has no effect without
+// [WithSender].
+func WithSendCallback(fn func(name string)) Option {
+	return clientOptionFunc(func(c *Client) {
+		c.onSend = fn
+	})
+}
+
 // WithSendOnly makes a sending client send these paths alone, and the
 // folders above them, as rsync's --files-from does. Paths are named as in
 // the file list: relative to the folder whose contents a path ending in /
@@ -115,6 +127,7 @@ type Client struct {
 	onFile           func(rsync.FileInfo)
 	unverifiedAppend bool
 	sendOnly         []string
+	onSend           func(name string)
 }
 
 // New creates a new [Client]. You can call [Client.Run] one or more times with
@@ -194,7 +207,7 @@ type Result struct {
 func (c *Client) Run(ctx context.Context, conn io.ReadWriteCloser, paths []string) (*Result, error) {
 	c.osenv.XferErrors.Store(0)
 	c.osenv.IOErrors.Store(0)
-	stats, fileList, err := maincmd.ClientRun(ctx, c.osenv, c.opts, conn, paths, c.negotiate, maincmd.ClientHooks{OnFile: c.onFile, UnverifiedAppend: c.unverifiedAppend, SendOnly: c.sendOnly})
+	stats, fileList, err := maincmd.ClientRun(ctx, c.osenv, c.opts, conn, paths, c.negotiate, maincmd.ClientHooks{OnFile: c.onFile, UnverifiedAppend: c.unverifiedAppend, SendOnly: c.sendOnly, OnSend: c.onSend})
 	if err != nil {
 		return nil, err
 	}

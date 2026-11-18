@@ -52,11 +52,7 @@ func (st *Transfer) sendFileAppend(head rsync.SumHead, fileIndex int32, fl file)
 		return err
 	}
 
-	if !st.Opts.Server() &&
-		st.Opts.InfoGTE(rsyncopts.INFO_NAME, 1) &&
-		st.Opts.InfoGTE(rsyncopts.INFO_PROGRESS, 1) {
-		fmt.Fprintln(st.Env.Stdout, fl.path)
-	}
+	st.begin(fl)
 
 	h := md4.New()
 	binary.Write(h, binary.LittleEndian, st.Seed)
