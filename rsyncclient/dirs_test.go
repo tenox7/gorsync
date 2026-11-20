@@ -18,11 +18,11 @@ import (
 )
 
 // listGorsync runs a dry run with flags against gorsync's own sender,
-// serving src as a module, for the path req in it.
-func listGorsync(t *testing.T, src string, flags []string, req string) *rsyncclient.Result {
+// serving src as a module, for the path req in it. opts go to the client.
+func listGorsync(t *testing.T, src string, flags []string, req string, opts ...rsyncclient.Option) *rsyncclient.Result {
 	t.Helper()
 	stderr := testlogger.New(t)
-	client, err := rsyncclient.New(flags, rsyncclient.WithStdout(io.Discard), rsyncclient.WithStderr(stderr))
+	client, err := rsyncclient.New(flags, append([]rsyncclient.Option{rsyncclient.WithStdout(io.Discard), rsyncclient.WithStderr(stderr)}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}

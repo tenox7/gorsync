@@ -268,11 +268,12 @@ func doCmd(osenv *rsyncos.Env, opts *rsyncopts.Options, machine, user, path stri
 
 func fileInfo(f *receiver.File) rsync.FileInfo {
 	return rsync.FileInfo{
-		Name:     f.Name,
-		Length:   f.Length,
-		ModTime:  f.ModTime,
-		Mode:     f.Mode,
-		Checksum: f.Checksum,
+		Name:       f.Name,
+		Length:     f.Length,
+		ModTime:    f.ModTime,
+		Mode:       f.Mode,
+		Checksum:   f.Checksum,
+		LinkTarget: f.LinkTarget,
 	}
 }
 
